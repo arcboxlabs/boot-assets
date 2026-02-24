@@ -197,29 +197,20 @@ jobs:
           retention-days: 1
 
   # ==========================================================================
-  # Stage 1b: Build rootfs.squashfs on Ubuntu where Docker is available.
-  # Docker enables proper `apk add iptables` instead of the fragile Python
-  # APK extraction workaround required on macOS (no Docker, no apk tool).
+  # Stage 1b: Build rootfs.ext4 on Ubuntu where Docker is available.
+  # The ext4 rootfs is built inside a privileged Docker container so loop
+  # devices can be used to create the filesystem image.
   # ==========================================================================
   build-rootfs:
-    name: Build rootfs.squashfs
-    needs: [resolve-vars, build-agent]
+    name: Build rootfs.ext4
+    needs: [resolve-vars]
     runs-on: ubuntu-24.04-arm
 
     steps:
       - name: Checkout boot-assets repository
         uses: actions/checkout@v4
 
-      - name: Download agent binary
-        uses: actions/download-artifact@v4
-        with:
-          name: agent-binary
-          path: staging
-
-      - name: Install squashfs-tools
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq squashfs-tools
-
-      - name: Download Alpine minirootfs
+      - name: Download Alpine modloop
         run: |
           chmod +x scripts/*.sh
           ./scripts/download-kernel.sh \
@@ -227,22 +218,20 @@ jobs:
             --alpine-version "${{ needs.resolve-vars.outputs.alpine_version }}" \
             --flavor "${{ needs.resolve-vars.outputs.alpine_flavor }}" \
             --out-dir "$PWD/build/arm64/base" \
-            --minirootfs-only
+            --no-minirootfs
 
-      - name: Build rootfs.squashfs
+      - name: Build rootfs.ext4
         run: |
-          chmod +x staging/arcbox-agent
-          ALPINE_VERSION="${{ needs.resolve-vars.outputs.alpine_version }}" \
-          ./scripts/build-rootfs.sh \
-            --agent-bin "$PWD/staging/arcbox-agent" \
-            --alpine-minirootfs "$PWD/build/arm64/base/alpine-minirootfs.tar.gz" \
-            --output "$PWD/build/arm64/work/rootfs.squashfs"
+          ./scripts/build-alpine-rootfs.sh \
+            --output "$PWD/build/arm64/work/rootfs.ext4" \
+            --alpine-version "${{ needs.resolve-vars.outputs.alpine_version }}" \
+            --modloop "$PWD/build/arm64/base/modloop-${{ needs.resolve-vars.outputs.alpine_flavor }}"
 
-      - name: Upload rootfs.squashfs
+      - name: Upload rootfs.ext4
         uses: actions/upload-artifact@v4
         with:
-          name: rootfs-squashfs
-          path: build/arm64/work/rootfs.squashfs
+          name: rootfs-ext4
+          path: build/arm64/work/rootfs.ext4
           retention-days: 1
 
   # ==========================================================================
@@ -281,10 +270,10 @@ jobs:
           name: agent-binary
           path: staging
 
-      - name: Download rootfs.squashfs
+      - name: Download rootfs.ext4
         uses: actions/download-artifact@v4
         with:
-          name: rootfs-squashfs
+          name: rootfs-ext4
           path: staging
 
       - name: Build release assets
@@ -306,7 +295,7 @@ jobs:
             --youki-version "${{ needs.resolve-vars.outputs.youki_version }}" \
             --youki-sha256 "${{ needs.resolve-vars.outputs.youki_sha256 }}" \
             --agent-bin "$PWD/staging/arcbox-agent" \
-            --rootfs "$PWD/staging/rootfs.squashfs" \
+            --rootfs "$PWD/staging/rootfs.ext4" \
             --arcbox-sha "${{ needs.build-agent.outputs.arcbox_sha }}" \
             --output-dir "$PWD/dist"
 

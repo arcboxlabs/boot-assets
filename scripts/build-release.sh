@@ -47,7 +47,7 @@ Optional:
   --arcbox-ref <ref>       ArcBox source ref (for manifest)
   --output-dir <dir>       Output directory (default: dist/)
   --agent-bin <path>       Use pre-built arcbox-agent binary (skip cargo build)
-  --rootfs <path>          Use pre-built rootfs.squashfs (skip build-rootfs.sh)
+  --rootfs <path>          Use pre-built rootfs.ext4 (skip build-alpine-rootfs.sh)
   --arcbox-sha <sha>       Override arcbox git SHA recorded in manifest
 EOF
 }
@@ -238,34 +238,24 @@ else
   fi
 fi
 
-echo "==> build stage1 initramfs"
-"$SCRIPT_DIR/build-initramfs.sh" \
-  --agent-bin "$AGENT_BIN" \
+echo "==> build initramfs"
+"$SCRIPT_DIR/build-alpine-initramfs.sh" \
   --base-initramfs "$BASE_DIR/initramfs-${ARCH}" \
   --modloop "$BASE_DIR/modloop-${ALPINE_FLAVOR}" \
   --output "$WORK_DIR/initramfs.cpio.gz"
 
 if [[ -n "$PREBUILT_ROOTFS" ]]; then
-  echo "==> using pre-built rootfs.squashfs: $PREBUILT_ROOTFS"
+  echo "==> using pre-built rootfs.ext4: $PREBUILT_ROOTFS"
   if [[ ! -f "$PREBUILT_ROOTFS" ]]; then
     echo "pre-built rootfs not found: $PREBUILT_ROOTFS" >&2
     exit 1
   fi
-  cp "$PREBUILT_ROOTFS" "$WORK_DIR/rootfs.squashfs"
+  cp "$PREBUILT_ROOTFS" "$WORK_DIR/rootfs.ext4"
 else
-  # Locate Alpine minirootfs for building rootfs.squashfs.
-  ALPINE_MINIROOTFS="$BASE_DIR/alpine-minirootfs.tar.gz"
-  if [[ ! -f "$ALPINE_MINIROOTFS" ]]; then
-    echo "Alpine minirootfs not found: $ALPINE_MINIROOTFS" >&2
-    echo "Run download-kernel.sh without --no-minirootfs to download it." >&2
-    exit 1
-  fi
-
-  echo "==> build rootfs.squashfs (stage2 rootfs)"
-  "$SCRIPT_DIR/build-rootfs.sh" \
-    --agent-bin "$AGENT_BIN" \
-    --alpine-minirootfs "$ALPINE_MINIROOTFS" \
-    --output "$WORK_DIR/rootfs.squashfs"
+  echo "==> build rootfs.ext4"
+  "$SCRIPT_DIR/build-alpine-rootfs.sh" \
+    --output "$WORK_DIR/rootfs.ext4" \
+    --modloop "$BASE_DIR/modloop-${ALPINE_FLAVOR}"
 fi
 
 cp "$BASE_DIR/vmlinuz-${ARCH}" "$WORK_DIR/kernel"
@@ -274,10 +264,14 @@ cp -R "$BASE_DIR/runtime" "$WORK_DIR/runtime"
 # Copy modloop (Alpine kernel modules squashfs) into the bundle so that Stage 2
 # can mount it and have a fully functional /lib/modules via modprobe.
 cp "$BASE_DIR/modloop-${ALPINE_FLAVOR}" "$WORK_DIR/modloop"
+# Include arcbox-agent binary in the bundle so the host can place it on VirtioFS
+# at /arcbox/bin/arcbox-agent for the OpenRC service inside the guest.
+mkdir -p "$WORK_DIR/bin"
+cp "$AGENT_BIN" "$WORK_DIR/bin/arcbox-agent"
 
 KERNEL_SHA256="$(shasum -a 256 "$WORK_DIR/kernel" | awk '{print $1}')"
 INITRAMFS_SHA256="$(shasum -a 256 "$WORK_DIR/initramfs.cpio.gz" | awk '{print $1}')"
-ROOTFS_SQUASHFS_SHA256="$(shasum -a 256 "$WORK_DIR/rootfs.squashfs" | awk '{print $1}')"
+ROOTFS_EXT4_SHA256="$(shasum -a 256 "$WORK_DIR/rootfs.ext4" | awk '{print $1}')"
 MODLOOP_SHA256="$(shasum -a 256 "$WORK_DIR/modloop" | awk '{print $1}')"
 if [[ -n "$ARCBOX_SHA_OVERRIDE" ]]; then
   ARCBOX_SHA="$ARCBOX_SHA_OVERRIDE"
@@ -292,12 +286,14 @@ RUNTIME_DOCKERD_SHA256="${RUNTIME_DOCKERD_SHA256:-$(shasum -a 256 "$WORK_DIR/run
 RUNTIME_CONTAINERD_SHA256="${RUNTIME_CONTAINERD_SHA256:-$(shasum -a 256 "$WORK_DIR/runtime/bin/containerd" | awk '{print $1}')}"
 RUNTIME_YOUKI_SHA256="${RUNTIME_YOUKI_SHA256:-$(shasum -a 256 "$WORK_DIR/runtime/bin/youki" | awk '{print $1}')}"
 
-# schema_version 3: adds modloop (Alpine kernel modules squashfs).
-# Stage 1 bind-mounts modloop/modules into Stage 2 so that modprobe works
-# normally after switch_root.
+# schema_version 4: Alpine rootfs + OpenRC architecture.
+# Replaces squashfs+overlay with ext4 block device rootfs.
+# The VMM attaches rootfs.ext4 as a VirtIO block device (/dev/vda);
+# initramfs mounts it and switch_roots to /sbin/init (Alpine OpenRC).
+# Agent binary is served via VirtioFS at /arcbox/bin/arcbox-agent.
 cat > "$WORK_DIR/manifest.json" <<EOF
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "asset_version": "${VERSION}",
   "arch": "${ARCH}",
   "alpine_branch_version": "${ALPINE_VERSION}",
@@ -307,7 +303,7 @@ cat > "$WORK_DIR/manifest.json" <<EOF
   "netboot_bundle_sha256": "${NETBOOT_SHA256}",
   "kernel_sha256": "${KERNEL_SHA256}",
   "initramfs_sha256": "${INITRAMFS_SHA256}",
-  "rootfs_squashfs_sha256": "${ROOTFS_SQUASHFS_SHA256}",
+  "rootfs_ext4_sha256": "${ROOTFS_EXT4_SHA256}",
   "modloop_sha256": "${MODLOOP_SHA256}",
   "kernel_source_url": "${KERNEL_URL}",
   "initramfs_source_url": "${INITRAMFS_URL}",
@@ -346,7 +342,7 @@ TARBALL="boot-assets-${ARCH}-v${VERSION}.tar.gz"
 
 echo "==> package tarball"
 tar -czf "$OUTPUT_DIR/$TARBALL" -C "$WORK_DIR" \
-  kernel initramfs.cpio.gz rootfs.squashfs modloop manifest.json runtime
+  kernel initramfs.cpio.gz rootfs.ext4 modloop manifest.json runtime bin
 shasum -a 256 "$OUTPUT_DIR/$TARBALL" > "$OUTPUT_DIR/$TARBALL.sha256"
 cp "$WORK_DIR/manifest.json" "$OUTPUT_DIR/manifest.json"
 
