@@ -20,6 +20,7 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUTPUT=""
 SIZE_MB=2048
 ALPINE_VERSION="3.21"
+MODLOOP=""
 DOCKER_IMAGE_TAG="arcbox-rootfs-builder"
 
 usage() {
@@ -32,6 +33,7 @@ Required options:
 Optional:
   --size <MB>              Image size in megabytes (default: 2048)
   --alpine-version <ver>   Alpine version (default: 3.21)
+  --modloop <path>         Path to Alpine modloop squashfs (provides /lib/modules)
 EOF
 }
 
@@ -47,6 +49,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --alpine-version)
       ALPINE_VERSION="$2"
+      shift 2
+      ;;
+    --modloop)
+      MODLOOP="$2"
       shift 2
       ;;
     -h|--help)
@@ -106,10 +112,25 @@ RUN apk add --no-cache \
     e2fsprogs \
     busybox-extras
 
-# Enable OpenRC services.
-RUN rc-update add docker default && \
-    rc-update add chronyd default && \
-    rc-update add networking default
+# Enable OpenRC services across all required runlevels.
+# sysinit: devfs (populate /dev), dmesg (kernel log buffer), cgroups (mount cgroup2).
+# boot: modules (/etc/modules loading), sysctl (ip_forward etc), bootmisc, hostname.
+# default: networking, docker, chrony, arcbox-agent, local.
+RUN rc-update add devfs sysinit && \
+    rc-update add procfs sysinit && \
+    rc-update add sysfs sysinit && \
+    rc-update add dmesg sysinit && \
+    rc-update add cgroups sysinit && \
+    rc-update add modules boot && \
+    rc-update add sysctl boot && \
+    rc-update add bootmisc boot && \
+    rc-update add hostname boot && \
+    rc-update add networking default && \
+    rc-update add docker default && \
+    rc-update add chronyd default
+
+# Add serial console on hvc0 (virtio console) for boot diagnostics.
+RUN sed -i '/^#ttyS0/a hvc0::respawn:/sbin/getty 115200 hvc0' /etc/inittab || true
 
 # Configure kernel modules to load at boot.
 RUN printf '%s\n' \
@@ -121,6 +142,12 @@ RUN printf '%s\n' \
     iptable_nat \
     iptable_filter \
     nf_conntrack \
+    xt_addrtype \
+    xt_conntrack \
+    xt_MASQUERADE \
+    br_netfilter \
+    bridge \
+    veth \
     > /etc/modules
 
 # Configure network interfaces.
@@ -132,17 +159,42 @@ RUN printf '%s\n' \
     'iface eth0 inet dhcp' \
     > /etc/network/interfaces
 
+# Provide fallback DNS resolvers until DHCP populates /etc/resolv.conf.
+RUN echo -e 'nameserver 8.8.8.8\nnameserver 1.1.1.1' > /etc/resolv.conf || true
+
 # Configure Docker daemon.
 RUN mkdir -p /etc/docker && \
     printf '%s\n' \
     '{' \
-    '  "storage-driver": "overlay2"' \
+    '  "storage-driver": "overlay2",' \
+    '  "dns": ["8.8.8.8", "1.1.1.1"],' \
+    '  "log-driver": "json-file",' \
+    '  "log-opts": {' \
+    '    "max-size": "10m",' \
+    '    "max-file": "3"' \
+    '  }' \
     '}' \
     > /etc/docker/daemon.json
+
+# Redirect Docker and containerd logs to VirtioFS mount for host-side debugging.
+# The Alpine init scripts use log_proxy with these specific variable names.
+RUN mkdir -p /etc/conf.d && \
+    printf '%s\n' \
+    'DOCKER_LOGFILE="/arcbox/dockerd.log"' \
+    > /etc/conf.d/docker && \
+    printf '%s\n' \
+    'log_file="/arcbox/containerd.log"' \
+    > /etc/conf.d/containerd
 
 # Configure sysctl for container networking.
 RUN mkdir -p /etc/sysctl.d && \
     echo 'net.ipv4.ip_forward = 1' > /etc/sysctl.d/99-arcbox.conf
+
+# Ensure cgroup2 unified mode for Docker.
+# Alpine OpenRC cgroups service must mount the unified hierarchy before dockerd.
+# The rc_cgroup_mode setting forces cgroup2 (unified) which Docker 20.10+ supports.
+RUN mkdir -p /etc/rc.conf.d && \
+    echo 'rc_cgroup_mode="unified"' > /etc/rc.conf.d/cgroups
 
 # Create mount points.
 RUN mkdir -p /arcbox /host-home
@@ -210,9 +262,16 @@ fi
 if ! mountpoint -q /host-home; then
     mount -t virtiofs home /host-home 2>/dev/null || true
 fi
+
+# Ensure DNS resolvers are configured.
+# VZ framework NAT may not provide DNS via DHCP; ensure fallback resolvers
+# so dockerd can resolve registry hostnames for image pulls.
+if ! grep -q '^nameserver' /etc/resolv.conf 2>/dev/null; then
+    printf 'nameserver 8.8.8.8\nnameserver 1.1.1.1\n' > /etc/resolv.conf
+fi
 LOCALSTART_EOF
 
-docker build -t "$DOCKER_IMAGE_TAG" "$WORK_DIR"
+docker build --load -t "$DOCKER_IMAGE_TAG" "$WORK_DIR"
 
 # ---------------------------------------------------------------------------
 # Phase 2: Export rootfs tarball from the container.
@@ -236,12 +295,23 @@ echo "==> creating ext4 image (${SIZE_MB}MB)"
 
 mkdir -p "$(dirname "$OUTPUT")"
 
+# If modloop is provided, copy it into the work directory for the privileged container.
+MODLOOP_MOUNT_ARG=""
+if [[ -n "$MODLOOP" ]]; then
+  if [[ ! -f "$MODLOOP" ]]; then
+    echo "modloop file not found: $MODLOOP" >&2
+    exit 1
+  fi
+  cp "$MODLOOP" "$WORK_DIR/modloop.sqfs"
+  echo "  modloop: $(du -h "$WORK_DIR/modloop.sqfs" | awk '{print $1}')"
+fi
+
 docker run --rm --privileged \
   -v "$WORK_DIR:/work" \
   "alpine:${ALPINE_VERSION}" \
   sh -c "
     set -e
-    apk add --no-cache e2fsprogs tar >/dev/null 2>&1
+    apk add --no-cache e2fsprogs tar squashfs-tools >/dev/null 2>&1
 
     # Create sparse ext4 image.
     dd if=/dev/zero of=/work/rootfs.ext4 bs=1M count=0 seek=${SIZE_MB} 2>/dev/null
@@ -251,6 +321,26 @@ docker run --rm --privileged \
     mkdir -p /mnt/rootfs
     mount -o loop /work/rootfs.ext4 /mnt/rootfs
     tar -xf /work/rootfs.tar -C /mnt/rootfs
+
+    # Remove Docker build artifacts that confuse OpenRC.
+    # /.dockerenv causes OpenRC to skip services with 'keyword -docker'
+    # (e.g. networking), which prevents eth0 from being configured.
+    rm -f /mnt/rootfs/.dockerenv
+
+    # Extract kernel modules from modloop if provided.
+    if [ -f /work/modloop.sqfs ]; then
+      echo 'Injecting kernel modules from modloop...'
+      mkdir -p /mnt/modloop
+      unsquashfs -f -d /mnt/modloop /work/modloop.sqfs >/dev/null 2>&1
+      KVER=\$(ls /mnt/modloop/modules/ 2>/dev/null | head -1)
+      if [ -n \"\$KVER\" ]; then
+        mkdir -p /mnt/rootfs/lib/modules/\$KVER
+        cp -a /mnt/modloop/modules/\$KVER/* /mnt/rootfs/lib/modules/\$KVER/
+        echo \"  kernel modules installed: \$KVER\"
+      else
+        echo '  warning: no kernel version found in modloop'
+      fi
+    fi
 
     # Sync and unmount.
     sync

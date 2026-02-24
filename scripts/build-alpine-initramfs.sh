@@ -152,7 +152,7 @@ copy_module "$MODS_SRC/net/vmw_vsock" "$MODS_DST/net/vmw_vsock" vmw_vsock_virtio
 # ext4 filesystem (needed to mount /dev/vda rootfs).
 copy_module "$MODS_SRC/fs/ext4" "$MODS_DST/fs/ext4" ext4.ko
 copy_module "$MODS_SRC/fs/jbd2" "$MODS_DST/fs/jbd2" jbd2.ko
-copy_module "$MODS_SRC/fs/mbcache" "$MODS_DST/fs/mbcache" mbcache.ko
+copy_module "$MODS_SRC/fs" "$MODS_DST/fs" mbcache.ko
 copy_module "$MODS_SRC/lib" "$MODS_DST/lib" crc16.ko
 
 # Module metadata so modprobe can resolve dependencies.
@@ -218,7 +218,7 @@ load_ko virtio_blk             "kernel/drivers/block/virtio_blk.ko"
 
 # ext4 filesystem (for rootfs).
 load_ko crc16                  "kernel/lib/crc16.ko"
-load_ko mbcache                "kernel/fs/mbcache/mbcache.ko"
+load_ko mbcache                "kernel/fs/mbcache.ko"
 load_ko jbd2                   "kernel/fs/jbd2/jbd2.ko"
 load_ko ext4                   "kernel/fs/ext4/ext4.ko"
 
@@ -261,6 +261,18 @@ fi
 /bin/busybox mount --move /proc /newroot/proc
 /bin/busybox mount --move /sys  /newroot/sys
 /bin/busybox mount --move /dev  /newroot/dev
+
+# Pre-mount cgroup2 unified hierarchy so dockerd finds it immediately.
+# OpenRC's cgroups service (sysinit) will detect this and skip re-mounting.
+/bin/busybox mkdir -p /newroot/sys/fs/cgroup
+/bin/busybox mount -t cgroup2 cgroup2 /newroot/sys/fs/cgroup 2>/dev/null || true
+
+# Write fallback DNS resolvers so dockerd can resolve registries.
+# DHCP may update this later, but dockerd needs DNS at startup.
+if [ ! -f /newroot/etc/resolv.conf ] || ! /bin/busybox grep -q '^nameserver' /newroot/etc/resolv.conf 2>/dev/null; then
+  echo 'nameserver 8.8.8.8' > /newroot/etc/resolv.conf
+  echo 'nameserver 1.1.1.1' >> /newroot/etc/resolv.conf
+fi
 
 log "Switching root to /dev/vda (OpenRC)..."
 exec /bin/busybox switch_root /newroot /sbin/init
