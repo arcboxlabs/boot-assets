@@ -22,7 +22,8 @@ YOUKI_VERSION=""
 YOUKI_SHA256=""
 # Pre-built artifacts: when provided, the corresponding build steps are skipped.
 PREBUILT_AGENT_BIN=""  # --agent-bin: skip cargo build arcbox-agent
-PREBUILT_ROOTFS=""     # --rootfs:    skip build-rootfs.sh
+PREBUILT_ROOTFS=""     # --rootfs:    skip build-alpine-rootfs.sh
+PREBUILT_KERNEL_DIR="" # --kernel-dir: skip build-kernel.sh
 ARCBOX_SHA_OVERRIDE="" # --arcbox-sha: override git rev-parse HEAD
 
 usage() {
@@ -48,6 +49,7 @@ Optional:
   --output-dir <dir>       Output directory (default: dist/)
   --agent-bin <path>       Use pre-built arcbox-agent binary (skip cargo build)
   --rootfs <path>          Use pre-built rootfs.ext4 (skip build-alpine-rootfs.sh)
+  --kernel-dir <path>      Use pre-built kernel dir (contains kernel + kernel-build.env)
   --arcbox-sha <sha>       Override arcbox git SHA recorded in manifest
 EOF
 }
@@ -118,6 +120,10 @@ while [[ $# -gt 0 ]]; do
       PREBUILT_ROOTFS="$2"
       shift 2
       ;;
+    --kernel-dir)
+      PREBUILT_KERNEL_DIR="$2"
+      shift 2
+      ;;
     --arcbox-sha)
       ARCBOX_SHA_OVERRIDE="$2"
       shift 2
@@ -139,8 +145,8 @@ if [[ -z "$VERSION" || -z "$ARCBOX_DIR" ]]; then
   exit 1
 fi
 
-if [[ "$ARCH" != "arm64" ]]; then
-  echo "unsupported arch: $ARCH (expected: arm64)" >&2
+if [[ "$ARCH" != "arm64" && "$ARCH" != "amd64" ]]; then
+  echo "unsupported arch: $ARCH (expected: arm64 or amd64)" >&2
   exit 1
 fi
 
@@ -149,13 +155,22 @@ if [[ ! -f "$ARCBOX_DIR/Cargo.toml" ]]; then
   exit 1
 fi
 
-TARGET_TRIPLE="aarch64-unknown-linux-musl"
-ALPINE_ARCH="aarch64"
+case "$ARCH" in
+  arm64)
+    TARGET_TRIPLE="aarch64-unknown-linux-musl"
+    ALPINE_ARCH="aarch64"
+    CARGO_LINKER_ENV="CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER"
+    ;;
+  amd64)
+    TARGET_TRIPLE="x86_64-unknown-linux-musl"
+    ALPINE_ARCH="x86_64"
+    CARGO_LINKER_ENV="CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER"
+    ;;
+esac
+
 RELEASE_BASE_URL="https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/releases/${ALPINE_ARCH}"
 NETBOOT_BASE_URL="${RELEASE_BASE_URL}/netboot"
-KERNEL_URL="${NETBOOT_BASE_URL}/vmlinuz-${ALPINE_FLAVOR}"
 INITRAMFS_URL="${NETBOOT_BASE_URL}/initramfs-${ALPINE_FLAVOR}"
-MODLOOP_URL="${NETBOOT_BASE_URL}/modloop-${ALPINE_FLAVOR}"
 NETBOOT_RELEASE_VERSION="unknown"
 NETBOOT_FILE="unknown"
 NETBOOT_URL="unknown"
@@ -166,15 +181,13 @@ BASE_DIR="$BUILD_ROOT/base"
 WORK_DIR="$BUILD_ROOT/work"
 mkdir -p "$BASE_DIR" "$WORK_DIR" "$OUTPUT_DIR"
 
-echo "==> download base kernel/initramfs/modloop"
+echo "==> download base Alpine initramfs"
 _kernel_dl_flags=(
   --arch "$ARCH"
   --alpine-version "$ALPINE_VERSION"
   --flavor "$ALPINE_FLAVOR"
   --out-dir "$BASE_DIR"
 )
-# When a pre-built rootfs is provided, the minirootfs is not needed for
-# build-rootfs.sh; skip it to save download time.
 if [[ -n "$PREBUILT_ROOTFS" ]]; then
   _kernel_dl_flags+=(--no-minirootfs)
 fi
@@ -224,8 +237,8 @@ if [[ -n "$PREBUILT_AGENT_BIN" ]]; then
   AGENT_BIN="$PREBUILT_AGENT_BIN"
 else
   echo "==> build arcbox-agent"
-  CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER="${CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER:-rust-lld}" \
-  cargo build \
+  LINKER_VALUE="${!CARGO_LINKER_ENV:-rust-lld}"
+  env "${CARGO_LINKER_ENV}=${LINKER_VALUE}" cargo build \
     --manifest-path "$ARCBOX_DIR/Cargo.toml" \
     -p arcbox-agent \
     --target "$TARGET_TRIPLE" \
@@ -238,10 +251,30 @@ else
   fi
 fi
 
+if [[ -n "$PREBUILT_KERNEL_DIR" ]]; then
+  echo "==> using pre-built kernel dir: $PREBUILT_KERNEL_DIR"
+  KERNEL_DIR="$PREBUILT_KERNEL_DIR"
+else
+  echo "==> build kernel"
+  KERNEL_DIR="$BUILD_ROOT/kernel"
+  "$SCRIPT_DIR/build-kernel.sh" \
+    --arch "$ARCH" \
+    --out-dir "$KERNEL_DIR"
+fi
+if [[ ! -f "$KERNEL_DIR/kernel" ]]; then
+  echo "kernel not found: $KERNEL_DIR/kernel" >&2
+  exit 1
+fi
+if [[ ! -f "$KERNEL_DIR/kernel-build.env" ]]; then
+  echo "kernel metadata not found: $KERNEL_DIR/kernel-build.env" >&2
+  exit 1
+fi
+# shellcheck disable=SC1090
+source "$KERNEL_DIR/kernel-build.env"
+
 echo "==> build initramfs"
 "$SCRIPT_DIR/build-alpine-initramfs.sh" \
   --base-initramfs "$BASE_DIR/initramfs-${ARCH}" \
-  --modloop "$BASE_DIR/modloop-${ALPINE_FLAVOR}" \
   --output "$WORK_DIR/initramfs.cpio.gz"
 
 if [[ -n "$PREBUILT_ROOTFS" ]]; then
@@ -254,16 +287,12 @@ if [[ -n "$PREBUILT_ROOTFS" ]]; then
 else
   echo "==> build rootfs.ext4"
   "$SCRIPT_DIR/build-alpine-rootfs.sh" \
-    --output "$WORK_DIR/rootfs.ext4" \
-    --modloop "$BASE_DIR/modloop-${ALPINE_FLAVOR}"
+    --output "$WORK_DIR/rootfs.ext4"
 fi
 
-cp "$BASE_DIR/vmlinuz-${ARCH}" "$WORK_DIR/kernel"
+cp "$KERNEL_DIR/kernel" "$WORK_DIR/kernel"
 rm -rf "$WORK_DIR/runtime"
 cp -R "$BASE_DIR/runtime" "$WORK_DIR/runtime"
-# Copy modloop (Alpine kernel modules squashfs) into the bundle so that Stage 2
-# can mount it and have a fully functional /lib/modules via modprobe.
-cp "$BASE_DIR/modloop-${ALPINE_FLAVOR}" "$WORK_DIR/modloop"
 # Include arcbox-agent binary in the bundle so the host can place it on VirtioFS
 # at /arcbox/bin/arcbox-agent for the OpenRC service inside the guest.
 mkdir -p "$WORK_DIR/bin"
@@ -272,7 +301,6 @@ cp "$AGENT_BIN" "$WORK_DIR/bin/arcbox-agent"
 KERNEL_SHA256="$(shasum -a 256 "$WORK_DIR/kernel" | awk '{print $1}')"
 INITRAMFS_SHA256="$(shasum -a 256 "$WORK_DIR/initramfs.cpio.gz" | awk '{print $1}')"
 ROOTFS_EXT4_SHA256="$(shasum -a 256 "$WORK_DIR/rootfs.ext4" | awk '{print $1}')"
-MODLOOP_SHA256="$(shasum -a 256 "$WORK_DIR/modloop" | awk '{print $1}')"
 if [[ -n "$ARCBOX_SHA_OVERRIDE" ]]; then
   ARCBOX_SHA="$ARCBOX_SHA_OVERRIDE"
 else
@@ -285,6 +313,7 @@ RUNTIME_YOUKI_VERSION="${RUNTIME_YOUKI_VERSION:-unknown}"
 RUNTIME_DOCKERD_SHA256="${RUNTIME_DOCKERD_SHA256:-$(shasum -a 256 "$WORK_DIR/runtime/bin/dockerd" | awk '{print $1}')}"
 RUNTIME_CONTAINERD_SHA256="${RUNTIME_CONTAINERD_SHA256:-$(shasum -a 256 "$WORK_DIR/runtime/bin/containerd" | awk '{print $1}')}"
 RUNTIME_YOUKI_SHA256="${RUNTIME_YOUKI_SHA256:-$(shasum -a 256 "$WORK_DIR/runtime/bin/youki" | awk '{print $1}')}"
+KERNEL_SOURCE_URL="${KERNEL_SOURCE_URL:-unknown}"
 
 # schema_version 4: Alpine rootfs + OpenRC architecture.
 # Replaces squashfs+overlay with ext4 block device rootfs.
@@ -297,17 +326,17 @@ cat > "$WORK_DIR/manifest.json" <<EOF
   "asset_version": "${VERSION}",
   "arch": "${ARCH}",
   "alpine_branch_version": "${ALPINE_VERSION}",
-  "alpine_netboot_version": "${NETBOOT_RELEASE_VERSION}",
-  "netboot_bundle_file": "${NETBOOT_FILE}",
-  "netboot_bundle_url": "${NETBOOT_URL}",
-  "netboot_bundle_sha256": "${NETBOOT_SHA256}",
+  "alpine_netboot_version": null,
+  "netboot_bundle_file": null,
+  "netboot_bundle_url": null,
+  "netboot_bundle_sha256": null,
   "kernel_sha256": "${KERNEL_SHA256}",
   "initramfs_sha256": "${INITRAMFS_SHA256}",
   "rootfs_ext4_sha256": "${ROOTFS_EXT4_SHA256}",
-  "modloop_sha256": "${MODLOOP_SHA256}",
-  "kernel_source_url": "${KERNEL_URL}",
+  "modloop_sha256": null,
+  "kernel_source_url": "${KERNEL_SOURCE_URL}",
   "initramfs_source_url": "${INITRAMFS_URL}",
-  "modloop_source_url": "${MODLOOP_URL}",
+  "modloop_source_url": null,
   "kernel_commit": null,
   "agent_commit": "${ARCBOX_SHA}",
   "built_at": "${BUILT_AT}",
@@ -342,7 +371,7 @@ TARBALL="boot-assets-${ARCH}-v${VERSION}.tar.gz"
 
 echo "==> package tarball"
 tar -czf "$OUTPUT_DIR/$TARBALL" -C "$WORK_DIR" \
-  kernel initramfs.cpio.gz rootfs.ext4 modloop manifest.json runtime bin
+  kernel initramfs.cpio.gz rootfs.ext4 manifest.json runtime bin
 shasum -a 256 "$OUTPUT_DIR/$TARBALL" > "$OUTPUT_DIR/$TARBALL.sha256"
 cp "$WORK_DIR/manifest.json" "$OUTPUT_DIR/manifest.json"
 
