@@ -187,7 +187,7 @@ fi
 echo "verified source sha256: $CURRENT_SHA256"
 
 echo "==> build kernel toolchain image"
-docker build -f "$ROOT_DIR/kernel/Dockerfile" -t "$BUILD_IMAGE" "$ROOT_DIR"
+docker build -f "$ROOT_DIR/kernels/Dockerfile" -t "$BUILD_IMAGE" "$ROOT_DIR"
 
 echo "==> build kernel (${ARCH})"
 docker run --rm \
