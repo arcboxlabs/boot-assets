@@ -139,11 +139,13 @@ case "$ARCH" in
   arm64)
     KARCH="arm64"
     CROSS_COMPILE="aarch64-linux-gnu-"
+    BUILD_TARGET="Image"
     IMAGE_PATH="arch/arm64/boot/Image"
     ;;
   amd64)
     KARCH="x86"
     CROSS_COMPILE="x86_64-linux-gnu-"
+    BUILD_TARGET="bzImage"
     IMAGE_PATH="arch/x86/boot/bzImage"
     ;;
 esac
@@ -194,6 +196,7 @@ docker run --rm \
   -e SOURCE_SHA256="$SOURCE_SHA256" \
   -e KARCH="$KARCH" \
   -e CROSS_COMPILE="$CROSS_COMPILE" \
+  -e BUILD_TARGET="$BUILD_TARGET" \
   -e IMAGE_PATH="$IMAGE_PATH" \
   -e JOBS="$JOBS" \
   -e KBUILD_BUILD_TIMESTAMP="1970-01-01" \
@@ -213,9 +216,10 @@ docker run --rm \
 
     cp /input/kernel.config .config
     make ARCH="${KARCH}" CROSS_COMPILE="${CROSS_COMPILE}" olddefconfig
-    make ARCH="${KARCH}" CROSS_COMPILE="${CROSS_COMPILE}" -j"${JOBS}"
+    make ARCH="${KARCH}" CROSS_COMPILE="${CROSS_COMPILE}" -j"${JOBS}" "${BUILD_TARGET}"
 
-    cp "${IMAGE_PATH}" /out/kernel
+    # Stream copy is more portable across macOS-mounted Docker volumes than cp.
+    cat "${IMAGE_PATH}" > /out/kernel
 
     KERNEL_RELEASE="$(make -s ARCH="${KARCH}" CROSS_COMPILE="${CROSS_COMPILE}" kernelrelease)"
     KERNEL_IMAGE_SHA256=$(sha256sum /out/kernel | awk "{print \$1}")
