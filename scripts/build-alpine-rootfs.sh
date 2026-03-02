@@ -20,7 +20,6 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 OUTPUT=""
 SIZE_MB=2048
 ALPINE_VERSION="3.21"
-MODLOOP=""
 DOCKER_IMAGE_TAG="arcbox-rootfs-builder"
 
 usage() {
@@ -33,7 +32,6 @@ Required options:
 Optional:
   --size <MB>              Image size in megabytes (default: 2048)
   --alpine-version <ver>   Alpine version (default: 3.21)
-  --modloop <path>         Path to Alpine modloop squashfs (provides /lib/modules)
 EOF
 }
 
@@ -49,10 +47,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     --alpine-version)
       ALPINE_VERSION="$2"
-      shift 2
-      ;;
-    --modloop)
-      MODLOOP="$2"
       shift 2
       ;;
     -h|--help)
@@ -302,23 +296,12 @@ echo "==> creating ext4 image (${SIZE_MB}MB)"
 
 mkdir -p "$(dirname "$OUTPUT")"
 
-# If modloop is provided, copy it into the work directory for the privileged container.
-MODLOOP_MOUNT_ARG=""
-if [[ -n "$MODLOOP" ]]; then
-  if [[ ! -f "$MODLOOP" ]]; then
-    echo "modloop file not found: $MODLOOP" >&2
-    exit 1
-  fi
-  cp "$MODLOOP" "$WORK_DIR/modloop.sqfs"
-  echo "  modloop: $(du -h "$WORK_DIR/modloop.sqfs" | awk '{print $1}')"
-fi
-
 docker run --rm --privileged \
   -v "$WORK_DIR:/work" \
   "alpine:${ALPINE_VERSION}" \
   sh -c "
     set -e
-    apk add --no-cache e2fsprogs tar squashfs-tools >/dev/null 2>&1
+    apk add --no-cache e2fsprogs tar >/dev/null 2>&1
 
     # Create sparse ext4 image.
     dd if=/dev/zero of=/work/rootfs.ext4 bs=1M count=0 seek=${SIZE_MB} 2>/dev/null
@@ -333,21 +316,6 @@ docker run --rm --privileged \
     # /.dockerenv causes OpenRC to skip services with 'keyword -docker'
     # (e.g. networking), which prevents eth0 from being configured.
     rm -f /mnt/rootfs/.dockerenv
-
-    # Extract kernel modules from modloop if provided.
-    if [ -f /work/modloop.sqfs ]; then
-      echo 'Injecting kernel modules from modloop...'
-      mkdir -p /mnt/modloop
-      unsquashfs -f -d /mnt/modloop /work/modloop.sqfs >/dev/null 2>&1
-      KVER=\$(ls /mnt/modloop/modules/ 2>/dev/null | head -1)
-      if [ -n \"\$KVER\" ]; then
-        mkdir -p /mnt/rootfs/lib/modules/\$KVER
-        cp -a /mnt/modloop/modules/\$KVER/* /mnt/rootfs/lib/modules/\$KVER/
-        echo \"  kernel modules installed: \$KVER\"
-      else
-        echo '  warning: no kernel version found in modloop'
-      fi
-    fi
 
     # Sync and unmount.
     sync

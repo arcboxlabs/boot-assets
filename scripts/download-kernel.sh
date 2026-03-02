@@ -7,21 +7,17 @@ ARCH="arm64"
 ALPINE_VERSION="3.21"
 FLAVOR="lts"
 OUT_DIR=""
-DOWNLOAD_MINIROOTFS="1"
-SKIP_NETBOOT="0"
 
 usage() {
-  cat <<'EOF'
+  cat <<'USAGE_EOF'
 Usage: download-kernel.sh [options]
 
 Options:
-  --arch <arch>               Target architecture (only: arm64)
-  --alpine-version <version>  Alpine release version (default: 3.21)
-  --flavor <flavor>           Netboot flavor suffix (default: lts)
-  --out-dir <dir>             Output directory
-  --no-minirootfs             Skip Alpine minirootfs download
-  --minirootfs-only           Only download Alpine minirootfs (skip netboot bundle)
-EOF
+  --arch <arm64|amd64>      Target architecture (default: arm64)
+  --alpine-version <ver>    Alpine release version (default: 3.21)
+  --flavor <flavor>         Netboot flavor suffix (default: lts)
+  --out-dir <dir>           Output directory
+USAGE_EOF
 }
 
 while [[ $# -gt 0 ]]; do
@@ -42,15 +38,6 @@ while [[ $# -gt 0 ]]; do
       OUT_DIR="$2"
       shift 2
       ;;
-    --no-minirootfs)
-      DOWNLOAD_MINIROOTFS="0"
-      shift
-      ;;
-    --minirootfs-only)
-      SKIP_NETBOOT="1"
-      DOWNLOAD_MINIROOTFS="1"
-      shift
-      ;;
     -h|--help)
       usage
       exit 0
@@ -63,21 +50,30 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ "$ARCH" != "arm64" ]]; then
-  echo "unsupported arch: $ARCH (expected: arm64)" >&2
-  exit 1
-fi
+case "$ARCH" in
+  arm64)
+    ALPINE_ARCH="aarch64"
+    ;;
+  amd64)
+    ALPINE_ARCH="x86_64"
+    ;;
+  *)
+    echo "unsupported arch: $ARCH (expected: arm64 or amd64)" >&2
+    exit 1
+    ;;
+esac
 
 if [[ -z "$OUT_DIR" ]]; then
   OUT_DIR="$(pwd)/build/${ARCH}/base"
 fi
 
-ALPINE_ARCH="aarch64"
+mkdir -p "$OUT_DIR"
+
 RELEASE_BASE_URL="https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VERSION}/releases/${ALPINE_ARCH}"
 NETBOOT_BASE_URL="${RELEASE_BASE_URL}/netboot"
 LATEST_RELEASES_URL="${RELEASE_BASE_URL}/latest-releases.yaml"
-
-mkdir -p "$OUT_DIR"
+INITRAMFS_URL="${NETBOOT_BASE_URL}/initramfs-${FLAVOR}"
+INITRAMFS_OUT="$OUT_DIR/initramfs-${ARCH}"
 
 download_file() {
   local url="$1"
@@ -95,51 +91,6 @@ sha256_file() {
   fi
 }
 
-convert_vmlinuz_to_raw_image() {
-  local input="$1"
-  local output="$2"
-  local input_type
-  local output_type
-
-  input_type="$(file -b "$input" 2>/dev/null || true)"
-  if [[ "$input_type" == *"Linux kernel ARM64 boot executable Image"* ]]; then
-    cp "$input" "$output"
-    return
-  fi
-
-  if [[ "$input_type" != *"PE32+ executable (EFI application) Aarch64"* ]]; then
-    echo "unsupported kernel format: $input_type" >&2
-    echo "expected raw ARM64 Image or Alpine EFI-stub vmlinuz" >&2
-    exit 1
-  fi
-
-  # Alpine netboot vmlinuz-lts is an EFI stub that embeds a gzip stream.
-  # Extract and inflate the first gzip stream to recover the raw ARM64 Image.
-  python3 - "$input" "$output" <<'PY'
-import pathlib
-import sys
-import zlib
-
-src = pathlib.Path(sys.argv[1]).read_bytes()
-offset = src.find(b"\x1f\x8b\x08")
-if offset < 0:
-    raise SystemExit("failed to locate gzip payload in EFI-stub kernel")
-
-inflater = zlib.decompressobj(wbits=16 + zlib.MAX_WBITS)
-raw = inflater.decompress(src[offset:])
-if not raw:
-    raise SystemExit("failed to inflate gzip payload from EFI-stub kernel")
-
-pathlib.Path(sys.argv[2]).write_bytes(raw)
-PY
-
-  output_type="$(file -b "$output" 2>/dev/null || true)"
-  if [[ "$output_type" != *"Linux kernel ARM64 boot executable Image"* ]]; then
-    echo "converted kernel is not a raw ARM64 Image: $output_type" >&2
-    exit 1
-  fi
-}
-
 NETBOOT_METADATA_FILE="$(mktemp /tmp/boot-assets-netboot-metadata.XXXXXX)"
 cleanup() {
   rm -f "$NETBOOT_METADATA_FILE"
@@ -148,21 +99,20 @@ trap cleanup EXIT
 
 download_file "$LATEST_RELEASES_URL" "$NETBOOT_METADATA_FILE"
 
-# Parse netboot bundle metadata.
 NETBOOT_VERSION=""
 NETBOOT_FILE=""
 NETBOOT_SHA256=""
 
-# Parse minirootfs metadata (used by build-rootfs.sh for Stage 2 rootfs).
-MINIROOTFS_VERSION=""
-MINIROOTFS_FILE=""
-MINIROOTFS_SHA256=""
-
-parse_releases_yaml() {
-  local target_flavor="$1"
-  awk -v flavor="$target_flavor" '
+while IFS='=' read -r key value; do
+  case "$key" in
+    version) NETBOOT_VERSION="$value" ;;
+    file) NETBOOT_FILE="$value" ;;
+    sha256) NETBOOT_SHA256="$value" ;;
+  esac
+done < <(
+  awk '
 function emit() {
-  if (cur_flavor == flavor) {
+  if (cur_flavor == "alpine-netboot") {
     print "version=" cur_version;
     print "file=" cur_file;
     print "sha256=" cur_sha256;
@@ -179,143 +129,22 @@ function emit() {
 /^[[:space:]]+sha256:/ { cur_sha256 = $2; next }
 END { emit() }
 ' "$NETBOOT_METADATA_FILE"
-}
+)
 
-while IFS='=' read -r key value; do
-  case "$key" in
-    version) NETBOOT_VERSION="$value" ;;
-    file) NETBOOT_FILE="$value" ;;
-    sha256) NETBOOT_SHA256="$value" ;;
-  esac
-done < <(parse_releases_yaml "alpine-netboot")
+download_file "$INITRAMFS_URL" "$INITRAMFS_OUT"
+INITRAMFS_SHA256="$(sha256_file "$INITRAMFS_OUT")"
 
-while IFS='=' read -r key value; do
-  case "$key" in
-    version) MINIROOTFS_VERSION="$value" ;;
-    file) MINIROOTFS_FILE="$value" ;;
-    sha256) MINIROOTFS_SHA256="$value" ;;
-  esac
-done < <(parse_releases_yaml "alpine-minirootfs")
+echo "verified initramfs sha256: $INITRAMFS_SHA256"
 
-# ---------------------------------------------------------------------------
-# Download Alpine netboot bundle (kernel, initramfs, modloop).
-# Skipped when --minirootfs-only is passed.
-# ---------------------------------------------------------------------------
-if [[ "$SKIP_NETBOOT" == "0" ]]; then
-  if [[ -z "$NETBOOT_VERSION" || -z "$NETBOOT_FILE" || -z "$NETBOOT_SHA256" ]]; then
-    echo "failed to resolve alpine-netboot metadata from: $LATEST_RELEASES_URL" >&2
-    exit 1
-  fi
-
-  NETBOOT_URL="${RELEASE_BASE_URL}/${NETBOOT_FILE}"
-  NETBOOT_TARBALL="$OUT_DIR/$NETBOOT_FILE"
-
-  if [[ -f "$NETBOOT_TARBALL" ]]; then
-    CURRENT_SHA256="$(sha256_file "$NETBOOT_TARBALL")"
-    if [[ "$CURRENT_SHA256" == "$NETBOOT_SHA256" ]]; then
-      echo "skip (cached netboot bundle): $NETBOOT_TARBALL"
-    else
-      echo "cached netboot bundle checksum mismatch, re-downloading"
-      rm -f "$NETBOOT_TARBALL"
-      download_file "$NETBOOT_URL" "$NETBOOT_TARBALL"
-    fi
-  else
-    download_file "$NETBOOT_URL" "$NETBOOT_TARBALL"
-  fi
-
-  CURRENT_SHA256="$(sha256_file "$NETBOOT_TARBALL")"
-  if [[ "$CURRENT_SHA256" != "$NETBOOT_SHA256" ]]; then
-    echo "netboot bundle checksum mismatch: expected $NETBOOT_SHA256, got $CURRENT_SHA256" >&2
-    exit 1
-  fi
-  echo "verified netboot bundle sha256: $CURRENT_SHA256"
-
-  extract_member() {
-    local member="$1"
-    local output="$2"
-    echo "extract: $member -> $output"
-    if ! tar -xzf "$NETBOOT_TARBALL" -O "$member" > "$output"; then
-      rm -f "$output"
-      echo "failed to extract $member from $NETBOOT_TARBALL" >&2
-      exit 1
-    fi
-  }
-
-  extract_member "boot/vmlinuz-${FLAVOR}" "$OUT_DIR/vmlinuz-${ARCH}"
-  extract_member "boot/initramfs-${FLAVOR}" "$OUT_DIR/initramfs-${ARCH}"
-  extract_member "boot/modloop-${FLAVOR}" "$OUT_DIR/modloop-${FLAVOR}"
-  convert_vmlinuz_to_raw_image "$OUT_DIR/vmlinuz-${ARCH}" "$OUT_DIR/kernel-${ARCH}"
-
-  KERNEL_URL="${NETBOOT_BASE_URL}/vmlinuz-${FLAVOR}"
-  INITRAMFS_URL="${NETBOOT_BASE_URL}/initramfs-${FLAVOR}"
-  MODLOOP_URL="${NETBOOT_BASE_URL}/modloop-${FLAVOR}"
-
-  cat > "$OUT_DIR/netboot-metadata.env" <<EOF
+cat > "$OUT_DIR/netboot-metadata.env" <<ENV_EOF
 NETBOOT_BRANCH_VERSION=${ALPINE_VERSION}
 NETBOOT_RELEASE_VERSION=${NETBOOT_VERSION}
 NETBOOT_FILE=${NETBOOT_FILE}
-NETBOOT_URL=${NETBOOT_URL}
+NETBOOT_URL=${RELEASE_BASE_URL}/${NETBOOT_FILE}
 NETBOOT_SHA256=${NETBOOT_SHA256}
 NETBOOT_FLAVOR=${FLAVOR}
-KERNEL_URL=${KERNEL_URL}
 INITRAMFS_URL=${INITRAMFS_URL}
-MODLOOP_URL=${MODLOOP_URL}
-EOF
-fi
+INITRAMFS_SHA256=${INITRAMFS_SHA256}
+ENV_EOF
 
-# ---------------------------------------------------------------------------
-# Download Alpine minirootfs (used by build-rootfs.sh to construct Stage 2
-# rootfs.squashfs).
-# ---------------------------------------------------------------------------
-if [[ "$DOWNLOAD_MINIROOTFS" == "1" ]]; then
-  if [[ -z "$MINIROOTFS_FILE" || -z "$MINIROOTFS_SHA256" ]]; then
-    echo "warning: could not resolve alpine-minirootfs metadata, skipping" >&2
-  else
-    MINIROOTFS_URL="${RELEASE_BASE_URL}/${MINIROOTFS_FILE}"
-    MINIROOTFS_TARBALL="$OUT_DIR/alpine-minirootfs.tar.gz"
-
-    if [[ -f "$MINIROOTFS_TARBALL" ]]; then
-      CURRENT_SHA256="$(sha256_file "$MINIROOTFS_TARBALL")"
-      if [[ "$CURRENT_SHA256" == "$MINIROOTFS_SHA256" ]]; then
-        echo "skip (cached minirootfs): $MINIROOTFS_TARBALL"
-      else
-        echo "cached minirootfs checksum mismatch, re-downloading"
-        rm -f "$MINIROOTFS_TARBALL"
-        download_file "$MINIROOTFS_URL" "$MINIROOTFS_TARBALL"
-      fi
-    else
-      download_file "$MINIROOTFS_URL" "$MINIROOTFS_TARBALL"
-    fi
-
-    CURRENT_SHA256="$(sha256_file "$MINIROOTFS_TARBALL")"
-    if [[ "$CURRENT_SHA256" != "$MINIROOTFS_SHA256" ]]; then
-      echo "minirootfs checksum mismatch: expected $MINIROOTFS_SHA256, got $CURRENT_SHA256" >&2
-      exit 1
-    fi
-    echo "verified minirootfs sha256: $CURRENT_SHA256"
-
-    # Write or append minirootfs metadata to the env file.
-    # In --minirootfs-only mode the env file does not yet exist.
-    if [[ ! -f "$OUT_DIR/netboot-metadata.env" ]]; then
-      cat > "$OUT_DIR/netboot-metadata.env" <<EOF
-NETBOOT_BRANCH_VERSION=${ALPINE_VERSION}
-NETBOOT_FLAVOR=${FLAVOR}
-EOF
-    fi
-    cat >> "$OUT_DIR/netboot-metadata.env" <<EOF
-MINIROOTFS_VERSION=${MINIROOTFS_VERSION}
-MINIROOTFS_FILE=${MINIROOTFS_FILE}
-MINIROOTFS_URL=${MINIROOTFS_URL}
-MINIROOTFS_SHA256=${MINIROOTFS_SHA256}
-EOF
-    echo "minirootfs: $MINIROOTFS_TARBALL"
-  fi
-fi
-
-if [[ "$SKIP_NETBOOT" == "0" ]]; then
-  echo "kernel:    $OUT_DIR/kernel-${ARCH}"
-  echo "vmlinuz:   $OUT_DIR/vmlinuz-${ARCH}"
-  echo "initramfs: $OUT_DIR/initramfs-${ARCH}"
-  echo "modloop:   $OUT_DIR/modloop-${FLAVOR}"
-fi
-echo "metadata:  $OUT_DIR/netboot-metadata.env"
+echo "initramfs: $INITRAMFS_OUT"

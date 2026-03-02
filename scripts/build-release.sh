@@ -188,9 +188,6 @@ _kernel_dl_flags=(
   --flavor "$ALPINE_FLAVOR"
   --out-dir "$BASE_DIR"
 )
-if [[ -n "$PREBUILT_ROOTFS" ]]; then
-  _kernel_dl_flags+=(--no-minirootfs)
-fi
 "$SCRIPT_DIR/download-kernel.sh" "${_kernel_dl_flags[@]}"
 unset _kernel_dl_flags
 
