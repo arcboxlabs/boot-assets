@@ -1,0 +1,43 @@
+# upstream.toml — declares upstream binary sources for ArcBox runtime.
+#
+# `boot-assets sync-binaries` reads this file, downloads missing binaries
+# from upstream, and stages them for R2 upload.
+#
+# R2 layout: bin/{name}/{version}/{arch}/{name}
+# These are Linux static binaries shared into the guest VM via VirtioFS.
+
+[[binaries]]
+name = "dockerd"
+version = "27.5.1"
+
+[binaries.source.arm64]
+url = "https://download.docker.com/linux/static/stable/aarch64/docker-27.5.1.tgz"
+extract = "docker/dockerd"
+
+[binaries.source.x86_64]
+url = "https://download.docker.com/linux/static/stable/x86_64/docker-27.5.1.tgz"
+extract = "docker/dockerd"
+
+[[binaries]]
+name = "containerd"
+version = "2.0.4"
+
+[binaries.source.arm64]
+url = "https://github.com/containerd/containerd/releases/download/v2.0.4/containerd-static-2.0.4-linux-arm64.tar.gz"
+extract = "bin/containerd"
+
+[binaries.source.x86_64]
+url = "https://github.com/containerd/containerd/releases/download/v2.0.4/containerd-static-2.0.4-linux-amd64.tar.gz"
+extract = "bin/containerd"
+
+[[binaries]]
+name = "youki"
+version = "0.5.1"
+
+[binaries.source.arm64]
+url = "https://github.com/youki-dev/youki/releases/download/v0.5.1/youki_0_5_1_linux_arm64v8.tar.gz"
+extract = "youki_0_5_1_linux_arm64v8/youki"
+
+[binaries.source.x86_64]
+url = "https://github.com/youki-dev/youki/releases/download/v0.5.1/youki_0_5_1_linux_amd64v3.tar.gz"
+extract = "youki_0_5_1_linux_amd64v3/youki"

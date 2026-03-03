@@ -1,0 +1,71 @@
+name: Sync Upstream Binaries
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - "upstream.toml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    name: Sync Binaries to R2
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-x86_64-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-x86_64-cargo-
+
+      - name: Build CLI
+        run: cargo build --release
+
+      - name: Sync binaries
+        run: |
+          ./target/release/boot-assets sync-binaries \
+            --config upstream.toml \
+            --output dist/bin \
+            --cdn-base-url "https://dl.arcbox.dev/boot-assets"
+
+      - name: Upload to Cloudflare R2
+        uses: ryand56/r2-upload-action@latest
+        with:
+          r2-account-id: ${{ secrets.R2_ACCOUNT_ID }}
+          r2-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          r2-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          r2-bucket: ${{ secrets.R2_BUCKET }}
+          source-dir: dist/bin
+          destination-dir: boot-assets/bin
+
+      - name: Verify CDN
+        run: |
+          sleep 3
+
+          # Parse upstream.toml to check one binary per arch.
+          FIRST_NAME=$(grep -m1 '^name' upstream.toml | sed 's/.*"\(.*\)"/\1/')
+          FIRST_VER=$(grep -m1 '^version' upstream.toml | sed 's/.*"\(.*\)"/\1/')
+
+          for ARCH in arm64 x86_64; do
+            URL="https://dl.arcbox.dev/boot-assets/bin/${FIRST_NAME}/${FIRST_VER}/${ARCH}/${FIRST_NAME}"
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$URL")
+            echo "CDN check: $URL -> HTTP $HTTP_STATUS"
+            if [ "$HTTP_STATUS" != "200" ]; then
+              echo "::warning::CDN returned HTTP $HTTP_STATUS for $URL"
+            fi
+          done

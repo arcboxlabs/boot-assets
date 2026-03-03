@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version (e.g. 0.1.0)"
+        description: "Release version (e.g. 0.2.0)"
         required: true
         type: string
       kernel_tag:
@@ -42,13 +42,11 @@ jobs:
             VERSION="${{ github.ref_name }}"
             VERSION="${VERSION#v}"
           else
-            # Branch push (master): use short SHA as dev version.
             VERSION="0.0.0-dev.${GITHUB_SHA::7}"
           fi
 
           KERNEL_TAG="${{ github.event.inputs.kernel_tag }}"
           if [ -z "$KERNEL_TAG" ]; then
-            # Tag push: default to latest kernel release.
             KERNEL_TAG="latest"
           fi
 
@@ -89,7 +87,6 @@ jobs:
           fi
 
           ls -lh staging/
-          echo "==> Kernel downloaded"
 
       - name: Upload kernel artifact
         uses: actions/upload-artifact@v4
@@ -99,8 +96,7 @@ jobs:
           retention-days: 1
 
   # ==========================================================================
-  # Stage 1b: Build EROFS rootfs (needs Docker for Alpine container +
-  # mkfs.erofs for image creation).
+  # Stage 1b: Build EROFS rootfs (native arch runner).
   # ==========================================================================
   build-rootfs:
     name: Build EROFS Rootfs (${{ matrix.arch }})
@@ -115,16 +111,31 @@ jobs:
             runner: ubuntu-24.04
 
     steps:
-      - name: Checkout boot-assets
+      - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.arch }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ matrix.arch }}-cargo-
 
       - name: Install erofs-utils
         run: sudo apt-get update && sudo apt-get install -y erofs-utils
 
+      - name: Build CLI
+        run: cargo build --release --features build --no-default-features
+
       - name: Build EROFS rootfs
         run: |
-          chmod +x scripts/*.sh
-          ./scripts/build-erofs-rootfs.sh \
+          ./target/release/boot-assets build-rootfs \
             --output "$PWD/build/rootfs.erofs" \
             --arch ${{ matrix.arch }}
 
@@ -136,10 +147,10 @@ jobs:
           retention-days: 1
 
   # ==========================================================================
-  # Stage 2: Assemble tarball (kernel + rootfs.erofs + manifest.json).
+  # Stage 2: Assemble per-arch tarball + single-target manifest.
   # ==========================================================================
-  build:
-    name: Assemble Boot Assets (${{ matrix.arch }})
+  assemble:
+    name: Assemble (${{ matrix.arch }})
     needs: [resolve-vars, download-kernel, build-rootfs]
     runs-on: ubuntu-latest
     strategy:
@@ -147,8 +158,24 @@ jobs:
         arch: [arm64, x86_64]
 
     steps:
-      - name: Checkout boot-assets
+      - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-x86_64-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-x86_64-cargo-
+
+      - name: Build CLI
+        run: cargo build --release --features build --no-default-features
 
       - name: Download kernel
         uses: actions/download-artifact@v4
@@ -163,13 +190,8 @@ jobs:
           path: staging
 
       - name: Assemble release
-        id: assemble
-        env:
-          KERNEL_VERSION: ${{ needs.resolve-vars.outputs.kernel_tag }}
         run: |
-          chmod +x scripts/*.sh
-
-          ./scripts/build-release.sh \
+          ./target/release/boot-assets build-release \
             --version "${{ needs.resolve-vars.outputs.version }}" \
             --kernel "$PWD/staging/kernel-${{ matrix.arch }}" \
             --rootfs "$PWD/staging/rootfs.erofs" \
@@ -179,25 +201,76 @@ jobs:
             --source-ref "${{ needs.resolve-vars.outputs.kernel_tag }}" \
             --output-dir "$PWD/dist"
 
-          TARBALL="boot-assets-${{ matrix.arch }}-v${{ needs.resolve-vars.outputs.version }}.tar.gz"
-          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
-
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: boot-assets-release-${{ matrix.arch }}
-          path: |
-            dist/${{ steps.assemble.outputs.tarball }}
-            dist/${{ steps.assemble.outputs.tarball }}.sha256
-            dist/manifest.json
+          path: dist/
           retention-days: 14
 
   # ==========================================================================
-  # Create GitHub Release (tag pushes only).
+  # Stage 3: Merge per-arch manifests into unified schema v7 manifest.
+  # ==========================================================================
+  merge-manifest:
+    name: Merge Manifests
+    needs: [resolve-vars, assemble]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-x86_64-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-x86_64-cargo-
+
+      - name: Build CLI
+        run: cargo build --release --features build --no-default-features
+
+      - name: Download arm64 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: boot-assets-release-arm64
+          path: dist/arm64
+
+      - name: Download x86_64 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: boot-assets-release-x86_64
+          path: dist/x86_64
+
+      - name: Merge manifests
+        run: |
+          ./target/release/boot-assets merge-manifest \
+            dist/arm64/manifest.json \
+            dist/x86_64/manifest.json \
+            --output dist/manifest.json
+
+          echo "=== Merged manifest ==="
+          cat dist/manifest.json
+
+      - name: Upload merged manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: manifest-merged
+          path: dist/manifest.json
+          retention-days: 14
+
+  # ==========================================================================
+  # Stage 4: GitHub Release (tag pushes only).
   # ==========================================================================
   release:
-    name: Create GitHub Release
-    needs: [resolve-vars, build]
+    name: GitHub Release
+    needs: [resolve-vars, assemble, merge-manifest]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
 
@@ -214,36 +287,50 @@ jobs:
           name: boot-assets-release-x86_64
           path: dist
 
+      - name: Download merged manifest
+        uses: actions/download-artifact@v4
+        with:
+          name: manifest-merged
+          path: dist
+
       - name: Publish release
-        env:
-          VERSION: ${{ needs.resolve-vars.outputs.version }}
         uses: softprops/action-gh-release@v2
         with:
           name: Boot Assets v${{ needs.resolve-vars.outputs.version }}
           body: |
             ## Boot Assets v${{ needs.resolve-vars.outputs.version }}
 
-            Schema version 6 — kernel + EROFS rootfs only.
+            Schema version 7 — multi-target manifest, kernel + EROFS rootfs.
 
-            ### Files (ARM64)
-            - `boot-assets-arm64-v${{ needs.resolve-vars.outputs.version }}.tar.gz`
-            - `boot-assets-arm64-v${{ needs.resolve-vars.outputs.version }}.tar.gz.sha256`
-
-            ### Files (x86_64)
-            - `boot-assets-x86_64-v${{ needs.resolve-vars.outputs.version }}.tar.gz`
-            - `boot-assets-x86_64-v${{ needs.resolve-vars.outputs.version }}.tar.gz.sha256`
-
-            - `manifest.json`
-          files: dist/*
+            ### Files
+            - `boot-assets-arm64-v${{ needs.resolve-vars.outputs.version }}.tar.gz` (+ `.sha256`)
+            - `boot-assets-x86_64-v${{ needs.resolve-vars.outputs.version }}.tar.gz` (+ `.sha256`)
+            - `manifest.json` — unified multi-target manifest (schema v7)
+          files: |
+            dist/boot-assets-arm64-v${{ needs.resolve-vars.outputs.version }}.tar.gz
+            dist/boot-assets-arm64-v${{ needs.resolve-vars.outputs.version }}.tar.gz.sha256
+            dist/boot-assets-x86_64-v${{ needs.resolve-vars.outputs.version }}.tar.gz
+            dist/boot-assets-x86_64-v${{ needs.resolve-vars.outputs.version }}.tar.gz.sha256
+            dist/manifest.json
           draft: false
           prerelease: ${{ contains(needs.resolve-vars.outputs.version, 'alpha') || contains(needs.resolve-vars.outputs.version, 'beta') }}
 
   # ==========================================================================
-  # Upload to Cloudflare R2 (CDN: dl.arcbox.dev).
+  # Stage 5: Upload boot assets to Cloudflare R2.
+  #
+  # R2 layout (boot assets only):
+  #   boot-assets/
+  #   ├── latest.json                     # {"version":"x.y.z"}
+  #   └── v0.2.0/
+  #       ├── manifest.json               # unified schema v7
+  #       ├── arm64/kernel
+  #       ├── arm64/rootfs.erofs
+  #       ├── x86_64/kernel
+  #       └── x86_64/rootfs.erofs
   # ==========================================================================
   upload-r2:
     name: Upload to R2
-    needs: [resolve-vars, build]
+    needs: [resolve-vars, assemble, merge-manifest]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
 
@@ -260,27 +347,31 @@ jobs:
           name: boot-assets-release-x86_64
           path: dist/x86_64
 
+      - name: Download merged manifest
+        uses: actions/download-artifact@v4
+        with:
+          name: manifest-merged
+          path: dist
+
       - name: Prepare R2 directory structure
         run: |
           VERSION="${{ needs.resolve-vars.outputs.version }}"
+          R2="r2-staging"
 
-          mkdir -p "r2-staging/v${VERSION}"
+          mkdir -p "$R2/v${VERSION}/arm64"
+          mkdir -p "$R2/v${VERSION}/x86_64"
+
+          cp dist/manifest.json "$R2/v${VERSION}/manifest.json"
 
           for ARCH in arm64 x86_64; do
-            TARBALL="boot-assets-${ARCH}-v${VERSION}.tar.gz"
-            cp "dist/${ARCH}/${TARBALL}" "r2-staging/v${VERSION}/"
-            cp "dist/${ARCH}/${TARBALL}.sha256" "r2-staging/v${VERSION}/"
+            TARBALL="dist/${ARCH}/boot-assets-${ARCH}-v${VERSION}.tar.gz"
+            tar -xzf "$TARBALL" -C "$R2/v${VERSION}/${ARCH}/" kernel rootfs.erofs
           done
-          # Use arm64 manifest as canonical (identical schema, differs only in arch field).
-          cp "dist/arm64/manifest.json" "r2-staging/v${VERSION}/manifest-arm64.json"
-          cp "dist/x86_64/manifest.json" "r2-staging/v${VERSION}/manifest-x86_64.json"
 
-          printf '{"version":"%s","arm64":{"bundle":"boot-assets-arm64-v%s.tar.gz"},"x86_64":{"bundle":"boot-assets-x86_64-v%s.tar.gz"}}\n' \
-            "$VERSION" "$VERSION" "$VERSION" \
-            | python3 -m json.tool > "r2-staging/latest.json"
+          printf '{"version":"%s"}\n' "$VERSION" > "$R2/latest.json"
 
           echo "=== R2 staging ==="
-          find r2-staging -type f
+          find "$R2" -type f | sort
 
       - name: Upload to Cloudflare R2
         uses: ryand56/r2-upload-action@latest
@@ -295,11 +386,14 @@ jobs:
       - name: Verify CDN
         run: |
           VERSION="${{ needs.resolve-vars.outputs.version }}"
-          URL="https://dl.arcbox.dev/boot-assets/v${VERSION}/boot-assets-arm64-v${VERSION}.tar.gz.sha256"
-
           sleep 3
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$URL")
-          echo "CDN check: $URL -> HTTP $HTTP_STATUS"
-          if [ "$HTTP_STATUS" != "200" ]; then
-            echo "::warning::CDN returned HTTP $HTTP_STATUS (may need DNS propagation)"
-          fi
+          for URL in \
+            "https://dl.arcbox.dev/boot-assets/v${VERSION}/manifest.json" \
+            "https://dl.arcbox.dev/boot-assets/v${VERSION}/arm64/kernel" \
+            "https://dl.arcbox.dev/boot-assets/latest.json"; do
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$URL")
+            echo "CDN check: $URL -> HTTP $HTTP_STATUS"
+            if [ "$HTTP_STATUS" != "200" ]; then
+              echo "::warning::CDN returned HTTP $HTTP_STATUS for $URL"
+            fi
+          done

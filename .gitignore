@@ -1,6 +1,7 @@
 build/
 dist/
 output/
+target/
 
 # Prebuilt binaries — always build from source.
 *.gz
@@ -11,3 +12,8 @@ kernel-*
 
 # Secrets
 *.pem
+
+
+# Added by cargo
+
+/target

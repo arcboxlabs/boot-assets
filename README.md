@@ -1,29 +1,86 @@
 # ArcBox Boot Assets
 
-`boot-assets` is the single source of truth for ArcBox VM boot artifacts (schema v6).
+`boot-assets` is the single source of truth for ArcBox VM boot artifacts (schema v7).
 
-Each release publishes:
+Each release publishes per-architecture tarballs plus a unified multi-target manifest:
 
-1. `boot-assets-arm64-v{version}.tar.gz`
-2. `boot-assets-arm64-v{version}.tar.gz.sha256`
-3. `manifest.json`
+1. `boot-assets-{arch}-v{version}.tar.gz`
+2. `boot-assets-{arch}-v{version}.tar.gz.sha256`
+3. `manifest.json` (schema v7, multi-target)
 
 The tarball contains:
 
 1. `kernel` — pre-built Linux kernel from [`arcbox-labs/kernel`](https://github.com/arcbox-labs/kernel) (all drivers built-in, `CONFIG_MODULES=n`)
 2. `rootfs.erofs` — minimal read-only rootfs (busybox + mkfs.btrfs + iptables-legacy + CA certs)
-3. `manifest.json` — schema version 6
+3. `manifest.json` — per-arch manifest (merged into unified manifest at release time)
 
 No agent binary, no runtime binaries, no initramfs.
 Agent and runtime are distributed via VirtioFS from the host.
 
-## Runtime Consumption
+## Manifest Schema (v7)
 
-ArcBox downloads boot assets from GitHub Releases:
+The manifest supports multiple target architectures and host-side binaries:
 
-1. Repository: `arcbox-labs/boot-assets`
-2. Tag format: `v{version}`
-3. Version is selected by `BOOT_ASSET_VERSION` in `arcbox-core`
+```jsonc
+{
+  "schema_version": 7,
+  "asset_version": "0.2.0",
+  "built_at": "2026-03-03T12:00:00Z",
+  "source_repo": "arcbox-labs/kernel",
+  "source_ref": "v0.1.0",
+  "source_sha": "abc123",
+  "targets": {
+    "arm64": {
+      "kernel": { "path": "arm64/kernel", "sha256": "...", "version": "6.12.8" },
+      "rootfs": { "path": "arm64/rootfs.erofs", "sha256": "..." },
+      "kernel_cmdline": "console=hvc0 root=/dev/vda ro rootfstype=erofs earlycon"
+    },
+    "x86_64": {
+      "kernel": { "path": "x86_64/kernel", "sha256": "...", "version": "6.12.8" },
+      "rootfs": { "path": "x86_64/rootfs.erofs", "sha256": "..." },
+      "kernel_cmdline": "console=ttyS0 root=/dev/vda ro rootfstype=erofs earlycon"
+    }
+  },
+  "binaries": [
+    {
+      "name": "dockerd",
+      "version": "27.5.1",
+      "targets": {
+        "arm64":  { "path": "bin/arm64/dockerd",  "sha256": "..." },
+        "x86_64": { "path": "bin/x86_64/dockerd", "sha256": "..." }
+      }
+    }
+  ]
+}
+```
+
+## CLI Usage
+
+The tool is built with Rust. Install with `cargo build --release`.
+
+```bash
+# Build EROFS rootfs only
+boot-assets build-rootfs --output build/rootfs.erofs --arch arm64
+
+# Full release build (single arch)
+boot-assets build-release \
+  --version 0.2.0 \
+  --kernel build/kernel-arm64 \
+  --arch arm64
+
+# With pre-built rootfs
+boot-assets build-release \
+  --version 0.2.0 \
+  --kernel build/kernel-arm64 \
+  --rootfs build/rootfs.erofs \
+  --arch arm64 \
+  --source-repo arcbox-labs/kernel \
+  --source-ref v0.1.0
+
+# Merge per-arch manifests into unified multi-target manifest
+boot-assets merge-manifest dist/arm64/manifest.json dist/x86_64/manifest.json \
+  --output dist/manifest.json
+```
 
 ## Build And Release
 
@@ -38,30 +95,33 @@ Trigger:
 
 Pipeline stages:
 
-1. **Download kernel** — downloads pre-built ARM64 kernel from [`arcbox-labs/kernel`](https://github.com/arcbox-labs/kernel) release
-2. **Build EROFS rootfs** — creates minimal rootfs from Alpine static binaries
-3. **Assemble** — packages kernel + rootfs.erofs + manifest.json into tarball
-4. **Release** — publishes to GitHub Releases and Cloudflare R2
+1. **Download kernel** — downloads pre-built ARM64/x86_64 kernels from [`arcbox-labs/kernel`](https://github.com/arcbox-labs/kernel) release
+2. **Build EROFS rootfs** — creates minimal rootfs from Alpine static binaries (per-arch)
+3. **Assemble** — packages kernel + rootfs.erofs + manifest.json into tarball (per-arch)
+4. **Merge** — merges per-arch manifests into unified multi-target manifest
+5. **Release** — publishes to GitHub Releases and Cloudflare R2
 
 ### Local build
 
 Prerequisites:
 
-1. Docker (for extracting static Alpine binaries)
-2. `mkfs.erofs` (`erofs-utils`)
-3. Kernel binary from [`arcbox-labs/kernel`](https://github.com/arcbox-labs/kernel) release
+1. Rust toolchain
+2. Docker (for extracting static Alpine binaries)
+3. `mkfs.erofs` (`erofs-utils`)
+4. Kernel binary from [`arcbox-labs/kernel`](https://github.com/arcbox-labs/kernel) release
 
 ```bash
+# Build the CLI
+cargo build --release
+
 # Download kernel from arcbox-labs/kernel release
 gh release download v0.1.0 --repo arcbox-labs/kernel --pattern "kernel-arm64" --dir build/
 
-# Build EROFS rootfs only
-./scripts/build-erofs-rootfs.sh --output build/rootfs.erofs
-
 # Full release build
-./scripts/build-release.sh \
-  --version 0.1.0 \
-  --kernel build/kernel-arm64
+./target/release/boot-assets build-release \
+  --version 0.2.0 \
+  --kernel build/kernel-arm64 \
+  --arch arm64
 ```
 
 Output files are written to `dist/`.
@@ -83,10 +143,3 @@ Output files are written to `dist/`.
 │   └── ca-certificates.crt
 └── (mount points)       # tmp/ run/ proc/ sys/ dev/ mnt/ arcbox/ Users/ etc/ var/
 ```
-
-## Scripts
-
-| Script | Purpose |
-|--------|---------|
-| `scripts/build-erofs-rootfs.sh` | Build minimal EROFS rootfs from Alpine static binaries |
-| `scripts/build-release.sh` | Assemble release tarball (kernel + rootfs.erofs + manifest) |
