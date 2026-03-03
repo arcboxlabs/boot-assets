@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - "v*"
+    branches:
+      - master
   workflow_dispatch:
     inputs:
       version:
@@ -40,8 +42,8 @@ jobs:
             VERSION="${{ github.ref_name }}"
             VERSION="${VERSION#v}"
           else
-            echo "unable to resolve version" >&2
-            exit 1
+            # Branch push (master): use short SHA as dev version.
+            VERSION="0.0.0-dev.${GITHUB_SHA::7}"
           fi
 
           KERNEL_TAG="${{ github.event.inputs.kernel_tag }}"
@@ -224,6 +226,7 @@ jobs:
     name: Upload to R2
     needs: build
     runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
 
     steps:
       - name: Download build artifacts
