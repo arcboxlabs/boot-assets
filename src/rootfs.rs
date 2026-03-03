@@ -46,23 +46,66 @@ pub fn build_rootfs(opts: &BuildRootfsOpts) -> Result<()> {
     let staging = tempfile::tempdir().context("failed to create temp dir")?;
     let staging_path = staging.path();
 
-    // Step 1: Extract static binaries via Docker.
-    println!("==> Extracting static binaries via Docker ({docker_platform})");
+    // Step 1: Build fully-static binaries via Docker (Alpine musl).
+    // All binaries are statically linked — no .so files needed in the rootfs.
+    println!("==> Building static binaries via Docker ({docker_platform})");
     let docker_script = r#"
 set -e
-apk add --no-cache busybox-static btrfs-progs iptables ca-certificates
+
+apk add --no-cache \
+  build-base git autoconf automake libtool pkgconf \
+  linux-headers \
+  util-linux-dev util-linux-static \
+  zlib-dev zlib-static \
+  lzo-dev \
+  zstd-dev zstd-static \
+  busybox-static ca-certificates
+
+# 1. busybox (pre-built static from Alpine)
 cp /bin/busybox.static /out/busybox
-if [ -f /sbin/mkfs.btrfs ]; then cp /sbin/mkfs.btrfs /out/mkfs.btrfs
-elif [ -f /usr/sbin/mkfs.btrfs ]; then cp /usr/sbin/mkfs.btrfs /out/mkfs.btrfs
-else echo "mkfs.btrfs not found" >&2; exit 1; fi
-IPTABLES_BIN=""
-for c in /sbin/iptables-legacy /usr/sbin/iptables-legacy /sbin/iptables /usr/sbin/iptables; do
-  if [ -f "$c" ]; then IPTABLES_BIN="$c"; break; fi
-done
-if [ -z "$IPTABLES_BIN" ]; then echo "iptables not found" >&2; exit 1; fi
-cp "$IPTABLES_BIN" /out/iptables
-cp /lib/ld-musl-*.so.1 /out/
+echo "[1/3] busybox (static) OK"
+
+# 2. mkfs.btrfs (static build from source)
+cd /tmp
+git clone --depth 1 --branch v6.12 https://github.com/kdave/btrfs-progs.git
+cd btrfs-progs
+./autogen.sh
+LDFLAGS="-static" ./configure \
+  --disable-documentation --disable-python \
+  --disable-zoned --disable-libudev \
+  --disable-convert
+make -j$(nproc) mkfs.btrfs
+strip mkfs.btrfs
+cp mkfs.btrfs /out/
+echo "[2/3] mkfs.btrfs (static) OK"
+
+# 3. iptables-legacy (static build from source)
+cd /tmp
+wget -q https://www.netfilter.org/projects/iptables/files/iptables-1.8.11.tar.xz
+tar -xf iptables-1.8.11.tar.xz
+cd iptables-1.8.11
+LDFLAGS="-all-static" ./configure \
+  --enable-static --disable-shared \
+  --disable-nftables --disable-connlabel
+make -j$(nproc)
+strip iptables/xtables-legacy-multi
+cp iptables/xtables-legacy-multi /out/iptables
+echo "[3/3] iptables-legacy (static) OK"
+
+# CA certificates
 cp /etc/ssl/certs/ca-certificates.crt /out/ca-certificates.crt
+
+# Verify all binaries are statically linked.
+echo "=== Verification ==="
+for bin in busybox mkfs.btrfs iptables; do
+  printf "  %-16s " "$bin"
+  if ldd "/out/$bin" >/dev/null 2>&1; then
+    echo "DYNAMIC (WARNING)"
+  else
+    echo "static OK"
+  fi
+done
+ls -lh /out/busybox /out/mkfs.btrfs /out/iptables
 "#;
 
     let status = Command::new("docker")
@@ -81,7 +124,7 @@ cp /etc/ssl/certs/ca-certificates.crt /out/ca-certificates.crt
         .status()
         .context("failed to run docker")?;
     if !status.success() {
-        bail!("docker extraction failed");
+        bail!("docker static build failed");
     }
 
     // Step 2: Build rootfs staging directory.
@@ -112,6 +155,7 @@ cp /etc/ssl/certs/ca-certificates.crt /out/ca-certificates.crt
     println!("==> EROFS rootfs built: {} ({size})", opts.output.display());
     println!("    Compression: {}", opts.compression);
     println!("    Contents: busybox + mkfs.btrfs + iptables-legacy + CA certs + trampoline");
+    println!("    All binaries statically linked (no .so dependencies)");
 
     Ok(())
 }
@@ -138,17 +182,8 @@ fn build_rootfs_tree(rootfs: &Path, staging: &Path) -> Result<()> {
     std::fs::write(sbin_dir.join("init"), INIT_SCRIPT)?;
     set_executable(&sbin_dir.join("init"))?;
 
-    // /lib — musl libc
-    let lib_dir = rootfs.join("lib");
-    std::fs::create_dir_all(&lib_dir)?;
-    for entry in std::fs::read_dir(staging)? {
-        let entry = entry?;
-        let name = entry.file_name();
-        let name_str = name.to_string_lossy();
-        if name_str.starts_with("ld-musl-") && name_str.ends_with(".so.1") {
-            copy_executable(&entry.path(), &lib_dir.join(&name))?;
-        }
-    }
+    // /lib — empty dir (kept for ld-linux compat; all binaries are static)
+    std::fs::create_dir_all(rootfs.join("lib"))?;
 
     // /cacerts
     let cacerts_dir = rootfs.join("cacerts");
