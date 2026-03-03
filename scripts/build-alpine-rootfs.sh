@@ -110,7 +110,8 @@ RUN apk add --no-cache \
     iptables ip6tables \
     chrony \
     e2fsprogs \
-    busybox-extras
+    busybox-extras \
+    nfs-utils
 
 # Enable OpenRC services across all required runlevels.
 # sysinit: devfs (populate /dev), dmesg (kernel log buffer), cgroups (mount cgroup2).
@@ -127,7 +128,9 @@ RUN rc-update add devfs sysinit && \
     rc-update add hostname boot && \
     rc-update add networking default && \
     rc-update add docker default && \
-    rc-update add chronyd default
+    rc-update add chronyd default && \
+    rc-update add rpcbind boot && \
+    rc-update add nfs default
 
 # Add serial console on hvc0 (virtio console) for boot diagnostics.
 RUN sed -i '/^#ttyS0/a hvc0::respawn:/sbin/getty 115200 hvc0' /etc/inittab || true
@@ -148,6 +151,9 @@ RUN printf '%s\n' \
     br_netfilter \
     bridge \
     veth \
+    sunrpc \
+    lockd \
+    nfsd \
     > /etc/modules
 
 # Configure network interfaces.
@@ -189,6 +195,12 @@ RUN mkdir -p /etc/conf.d && \
 # Configure sysctl for container networking.
 RUN mkdir -p /etc/sysctl.d && \
     echo 'net.ipv4.ip_forward = 1' > /etc/sysctl.d/99-arcbox.conf
+
+# Export Docker data directory read-only over NFSv4.
+RUN echo '/var/lib/docker *(ro,fsid=0,no_subtree_check,no_root_squash,crossmnt)' > /etc/exports
+
+# Force NFSv4-only: disable v2/v3, run 8 server threads.
+RUN sed -i 's/^OPTS_RPC_NFSD=.*/OPTS_RPC_NFSD="-N 2 -N 3 8"/' /etc/conf.d/nfs
 
 # Ensure cgroup2 unified mode for Docker.
 # Alpine OpenRC cgroups service must mount the unified hierarchy before dockerd.

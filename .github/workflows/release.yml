@@ -140,7 +140,7 @@ jobs:
   build-agent:
     name: Build arcbox-agent
     needs: resolve-vars
-    runs-on: macos-14
+    runs-on: macos-26
 
     outputs:
       arcbox_sha: ${{ steps.agent.outputs.arcbox_sha }}
@@ -241,7 +241,7 @@ jobs:
   build:
     name: Assemble Boot Assets
     needs: [resolve-vars, build-agent, build-rootfs]
-    runs-on: macos-14
+    runs-on: macos-26
 
     outputs:
       version: ${{ needs.resolve-vars.outputs.version }}
