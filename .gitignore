@@ -1,2 +1,13 @@
 build/
 dist/
+output/
+
+# Prebuilt binaries — always build from source.
+*.gz
+*.img
+*.erofs
+kernel
+kernel-*
+
+# Secrets
+*.pem
