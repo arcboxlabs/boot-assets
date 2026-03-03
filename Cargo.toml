@@ -8,7 +8,7 @@ default = ["download", "build"]
 # Enable async download + SHA256 verification (for daemon consumers).
 download = ["dep:reqwest", "dep:sha2", "dep:tokio", "dep:futures-util"]
 # Enable CLI build tools (rootfs builder, release assembler).
-build = ["dep:clap", "dep:chrono", "dep:flate2", "dep:tar", "dep:tempfile", "dep:sha2", "dep:anyhow"]
+build = ["dep:clap", "dep:chrono", "dep:flate2", "dep:tar", "dep:tempfile", "dep:sha2", "dep:anyhow", "dep:reqwest", "dep:tokio"]
 
 [dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
@@ -29,3 +29,7 @@ flate2 = { version = "1.1.9", optional = true }
 tar = { version = "0.4.44", optional = true }
 tempfile = { version = "3.26.0", optional = true }
 toml = { version = "1.0.3", features = ["parse"] }
+
+[[bin]]
+name = "boot-assets"
+required-features = ["build"]

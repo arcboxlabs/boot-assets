@@ -35,9 +35,9 @@ name = "youki"
 version = "0.5.1"
 
 [binaries.source.arm64]
-url = "https://github.com/youki-dev/youki/releases/download/v0.5.1/youki_0_5_1_linux_arm64v8.tar.gz"
-extract = "youki_0_5_1_linux_arm64v8/youki"
+url = "https://github.com/youki-dev/youki/releases/download/v0.5.1/youki-0.5.1-aarch64-musl.tar.gz"
+extract = "youki"
 
 [binaries.source.x86_64]
-url = "https://github.com/youki-dev/youki/releases/download/v0.5.1/youki_0_5_1_linux_amd64v3.tar.gz"
-extract = "youki_0_5_1_linux_amd64v3/youki"
+url = "https://github.com/youki-dev/youki/releases/download/v0.5.1/youki-0.5.1-x86_64-musl.tar.gz"
+extract = "youki"
