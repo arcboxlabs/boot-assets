@@ -73,7 +73,7 @@ cd btrfs-progs
 LDFLAGS="-static" ./configure \
   --disable-documentation --disable-python \
   --disable-zoned --disable-libudev \
-  --disable-convert
+  --disable-convert --disable-backtrace
 make -j$(nproc) mkfs.btrfs
 strip mkfs.btrfs
 cp mkfs.btrfs /out/
