@@ -1,14 +1,17 @@
 [package]
-name = "boot-assets"
-version = "0.1.0"
+name = "arcbox-boot"
+version = "0.2.0"
 edition = "2024"
+description = "Boot asset manifest types, asset manager, and CLI tools for ArcBox VM runtime"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/arcbox-labs/boot-assets"
 
 [features]
-default = ["download", "build"]
-# Enable async download + SHA256 verification (for daemon consumers).
-download = ["dep:reqwest", "dep:sha2", "dep:tokio", "dep:futures-util"]
-# Enable CLI build tools (rootfs builder, release assembler).
-build = ["dep:clap", "dep:chrono", "dep:flate2", "dep:tar", "dep:tempfile", "dep:sha2", "dep:anyhow", "dep:reqwest", "dep:tokio"]
+default = []
+# Async asset manager + binary download for daemon consumers.
+download = ["dep:reqwest", "dep:sha2", "dep:tokio", "dep:futures-util", "dep:dirs"]
+# CLI build tools (rootfs builder, release assembler). Includes download.
+build = ["download", "dep:clap", "dep:chrono", "dep:flate2", "dep:tar", "dep:tempfile", "dep:anyhow"]
 
 [dependencies]
 serde = { version = "1.0.228", features = ["derive"] }
@@ -20,6 +23,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 sha2 = { version = "0.10.9", optional = true }
 tokio = { version = "1", features = ["fs", "io-util", "rt", "macros"], optional = true }
 futures-util = { version = "0.3", optional = true }
+dirs = { version = "6", optional = true }
 
 # build feature (CLI only)
 anyhow = { version = "1.0.102", optional = true }
@@ -32,4 +36,5 @@ toml = { version = "1.0.3", features = ["parse"] }
 
 [[bin]]
 name = "boot-assets"
+path = "src/main.rs"
 required-features = ["build"]

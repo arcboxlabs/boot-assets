@@ -5,7 +5,7 @@ use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 
 use crate::rootfs::{BuildRootfsOpts, build_rootfs};
-use boot_assets::manifest::{FileEntry, Manifest, SCHEMA_VERSION, Target};
+use arcbox_boot::manifest::{FileEntry, Manifest, SCHEMA_VERSION, Target};
 
 #[derive(Debug, Clone)]
 pub struct BuildReleaseOpts {

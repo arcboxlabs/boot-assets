@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 
 use crate::release::merge_manifests;
-use boot_assets::manifest::Manifest;
+use arcbox_boot::manifest::Manifest;
 
 #[derive(Args)]
 pub struct MergeManifestArgs {

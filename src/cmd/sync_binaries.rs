@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use clap::Args;
 use sha2::{Digest, Sha256};
 
-use boot_assets::upstream::UpstreamConfig;
+use arcbox_boot::upstream::UpstreamConfig;
 
 const ARCHES: &[&str] = &["arm64", "x86_64"];
 
@@ -165,8 +165,8 @@ fn build_manifest_fragment(
     config: &UpstreamConfig,
     output: &std::path::Path,
     arches: &[&str],
-) -> Result<Vec<boot_assets::manifest::Binary>> {
-    use boot_assets::manifest::{Binary, BinaryTarget};
+) -> Result<Vec<arcbox_boot::manifest::Binary>> {
+    use arcbox_boot::manifest::{Binary, BinaryTarget};
     use std::collections::BTreeMap;
 
     let mut result = Vec::new();

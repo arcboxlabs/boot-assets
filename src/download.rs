@@ -160,7 +160,7 @@ impl Binary {
 }
 
 /// Returns the architecture string for the current host.
-fn current_arch() -> &'static str {
+pub(crate) fn current_arch() -> &'static str {
     if cfg!(target_arch = "aarch64") {
         "arm64"
     } else if cfg!(target_arch = "x86_64") {
@@ -170,12 +170,12 @@ fn current_arch() -> &'static str {
     }
 }
 
-async fn sha256_file(path: &Path) -> Result<String> {
+pub(crate) async fn sha256_file(path: &Path) -> Result<String> {
     let bytes = tokio::fs::read(path).await?;
     Ok(format!("{:x}", Sha256::digest(&bytes)))
 }
 
-async fn download_and_verify(
+pub(crate) async fn download_and_verify(
     url: &str,
     dest: &Path,
     expected_sha256: &str,
