@@ -56,7 +56,6 @@ apk add --no-cache \
   build-base git autoconf automake libtool pkgconf \
   linux-headers \
   util-linux-dev util-linux-static \
-  libeconf-dev \
   zlib-dev zlib-static \
   lzo-dev \
   zstd-dev zstd-static \
@@ -117,7 +116,7 @@ ls -lh /out/busybox /out/mkfs.btrfs /out/iptables
             docker_platform,
             "-v",
             &format!("{}:/out", staging_path.display()),
-            "alpine:latest",
+            "alpine:3.19",
             "sh",
             "-c",
             docker_script,
