@@ -71,12 +71,12 @@ pub fn build_release(opts: &BuildReleaseOpts) -> Result<()> {
 
     let target = Target {
         kernel: FileEntry {
-            path: format!("v{}/{}/kernel", opts.version, opts.arch),
+            path: format!("asset/v{}/{}/kernel", opts.version, opts.arch),
             sha256: kernel_sha256,
             version: opts.kernel_version.clone(),
         },
         rootfs: FileEntry {
-            path: format!("v{}/{}/rootfs.erofs", opts.version, opts.arch),
+            path: format!("asset/v{}/{}/rootfs.erofs", opts.version, opts.arch),
             sha256: rootfs_sha256,
             version: None,
         },

@@ -323,20 +323,22 @@ jobs:
           prerelease: ${{ contains(needs.resolve-vars.outputs.version, 'alpha') || contains(needs.resolve-vars.outputs.version, 'beta') }}
 
   # ==========================================================================
-  # Stage 5: Upload boot assets to Cloudflare R2.
+  # Stage 5: Upload boot assets to Backblaze B2.
   #
-  # R2 layout (boot assets only):
-  #   boot-assets/
+  # CDN layout (boot.arcboxcdn.com):
   #   ├── latest.json                     # {"version":"x.y.z"}
-  #   └── v0.2.0/
-  #       ├── manifest.json               # unified manifest
-  #       ├── arm64/kernel
-  #       ├── arm64/rootfs.erofs
-  #       ├── x86_64/kernel
-  #       └── x86_64/rootfs.erofs
+  #   ├── asset/
+  #   │   └── v0.2.3/
+  #   │       ├── manifest.json           # unified manifest
+  #   │       ├── arm64/kernel
+  #   │       ├── arm64/rootfs.erofs
+  #   │       ├── x86_64/kernel
+  #   │       └── x86_64/rootfs.erofs
+  #   └── bin/
+  #       └── {name}/{version}/{arch}/{name}
   # ==========================================================================
-  upload-r2:
-    name: Upload to R2
+  upload-b2:
+    name: Upload to B2
     needs: [resolve-vars, assemble, merge-manifest]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
@@ -360,44 +362,54 @@ jobs:
           name: manifest-merged
           path: dist
 
-      - name: Prepare R2 directory structure
+      - name: Prepare upload directory structure
         run: |
           VERSION="${{ needs.resolve-vars.outputs.version }}"
-          R2="r2-staging"
+          STAGING="b2-staging"
 
-          mkdir -p "$R2/v${VERSION}/arm64"
-          mkdir -p "$R2/v${VERSION}/x86_64"
-
-          cp dist/manifest.json "$R2/v${VERSION}/manifest.json"
-
+          # asset/v{version}/{arch}/kernel + rootfs.erofs
           for ARCH in arm64 x86_64; do
+            mkdir -p "$STAGING/asset/v${VERSION}/${ARCH}"
             TARBALL="dist/${ARCH}/boot-assets-${ARCH}-v${VERSION}.tar.gz"
-            tar -xzf "$TARBALL" -C "$R2/v${VERSION}/${ARCH}/" kernel rootfs.erofs
+            tar -xzf "$TARBALL" -C "$STAGING/asset/v${VERSION}/${ARCH}/" kernel rootfs.erofs
           done
+          cp dist/manifest.json "$STAGING/asset/v${VERSION}/manifest.json"
 
-          printf '{"version":"%s"}\n' "$VERSION" > "$R2/latest.json"
+          # bin/{name}/{version}/{arch}/{name} (from assemble artifacts)
+          for ARCH in arm64 x86_64; do
+            if [ -f "dist/${ARCH}/binaries.json" ]; then
+              BIN_DIR="dist/${ARCH}/bin"
+              if [ -d "$BIN_DIR" ]; then
+                cp -r "$BIN_DIR"/* "$STAGING/bin/" 2>/dev/null || true
+              fi
+            fi
+          done
+          mkdir -p "$STAGING/bin"
 
-          echo "=== R2 staging ==="
-          find "$R2" -type f | sort
+          # latest.json
+          printf '{"version":"%s"}\n' "$VERSION" > "$STAGING/latest.json"
 
-      - name: Upload to Cloudflare R2
-        uses: ryand56/r2-upload-action@latest
-        with:
-          r2-account-id: ${{ secrets.R2_ACCOUNT_ID }}
-          r2-access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
-          r2-secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          r2-bucket: ${{ secrets.R2_BUCKET }}
-          source-dir: r2-staging
-          destination-dir: boot-assets
+          echo "=== B2 staging ==="
+          find "$STAGING" -type f | sort
+
+      - name: Upload to Backblaze B2
+        run: |
+          aws s3 sync b2-staging/ "s3://${{ secrets.B2_BUCKET }}/" \
+            --endpoint-url "https://s3.${{ secrets.B2_REGION }}.backblazeb2.com" \
+            --delete --size-only
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.B2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.B2_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.B2_REGION }}
 
       - name: Verify CDN
         run: |
           VERSION="${{ needs.resolve-vars.outputs.version }}"
-          sleep 3
+          sleep 5
           for URL in \
-            "https://dl.arcbox.dev/boot-assets/v${VERSION}/manifest.json" \
-            "https://dl.arcbox.dev/boot-assets/v${VERSION}/arm64/kernel" \
-            "https://dl.arcbox.dev/boot-assets/latest.json"; do
+            "https://boot.arcboxcdn.com/asset/v${VERSION}/manifest.json" \
+            "https://boot.arcboxcdn.com/asset/v${VERSION}/arm64/kernel" \
+            "https://boot.arcboxcdn.com/latest.json"; do
             HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$URL")
             echo "CDN check: $URL -> HTTP $HTTP_STATUS"
             if [ "$HTTP_STATUS" != "200" ]; then

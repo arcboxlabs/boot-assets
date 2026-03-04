@@ -4,12 +4,12 @@ use crate::download::{ProgressCallback, PreparePhase, PrepareProgress, current_a
 use crate::error::{Error, Result};
 use crate::manifest::{Manifest, schema_version_for};
 
-const DEFAULT_CDN_BASE_URL: &str = "https://dl.arcbox.dev/boot-assets";
+const DEFAULT_CDN_BASE_URL: &str = "https://boot.arcboxcdn.com";
 
 /// Configuration for the asset manager.
 #[derive(Debug, Clone)]
 pub struct AssetManagerConfig {
-    /// CDN base URL (default: https://dl.arcbox.dev/boot-assets).
+    /// CDN base URL (default: https://boot.arcboxcdn.com).
     pub cdn_base_url: String,
     /// Boot asset version (e.g. "0.2.0").
     pub version: String,
@@ -164,7 +164,7 @@ impl AssetManager {
 
         // Download from CDN (no pre-known checksum; validated via schema after parsing).
         let url = format!(
-            "{}/v{}/manifest.json",
+            "{}/asset/v{}/manifest.json",
             self.config.cdn_base_url.trim_end_matches('/'),
             self.config.version
         );
