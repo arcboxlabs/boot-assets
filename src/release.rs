@@ -5,7 +5,7 @@ use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 
 use crate::rootfs::{BuildRootfsOpts, build_rootfs};
-use arcbox_boot::manifest::{FileEntry, Manifest, SCHEMA_VERSION, Target};
+use arcbox_boot::manifest::{Binary, FileEntry, Manifest, SCHEMA_VERSION, Target};
 
 #[derive(Debug, Clone)]
 pub struct BuildReleaseOpts {
@@ -19,6 +19,9 @@ pub struct BuildReleaseOpts {
     pub source_ref: Option<String>,
     pub source_sha: Option<String>,
     pub kernel_version: Option<String>,
+    /// Optional path to a JSON file containing `Vec<Binary>` entries
+    /// (output of `sync-binaries`). Populates the manifest `binaries` field.
+    pub binaries_json: Option<PathBuf>,
 }
 
 pub fn build_release(opts: &BuildReleaseOpts) -> Result<()> {
@@ -91,7 +94,7 @@ pub fn build_release(opts: &BuildReleaseOpts) -> Result<()> {
         source_ref: opts.source_ref.clone(),
         source_sha: opts.source_sha.clone(),
         targets,
-        binaries: Vec::new(),
+        binaries: load_binaries_json(&opts.binaries_json)?,
     };
 
     println!("==> Generating manifest.json (schema v{SCHEMA_VERSION})");
@@ -196,6 +199,16 @@ fn create_tarball(output: &Path, work_dir: &Path, files: &[&str]) -> Result<()> 
     }
     ar.finish()?;
     Ok(())
+}
+
+fn load_binaries_json(path: &Option<PathBuf>) -> Result<Vec<Binary>> {
+    let Some(path) = path else {
+        return Ok(Vec::new());
+    };
+    let bytes =
+        std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+    serde_json::from_slice(&bytes)
+        .with_context(|| format!("failed to parse binaries JSON from {}", path.display()))
 }
 
 fn humanize_size(bytes: u64) -> String {

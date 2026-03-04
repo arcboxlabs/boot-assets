@@ -189,6 +189,12 @@ jobs:
           name: rootfs-erofs-${{ matrix.arch }}
           path: staging
 
+      - name: Sync runtime binaries
+        run: |
+          ./target/release/boot-assets sync-binaries \
+            --arch ${{ matrix.arch }} \
+            --binaries-json "$PWD/dist/binaries.json"
+
       - name: Assemble release
         run: |
           ./target/release/boot-assets build-release \
@@ -199,7 +205,8 @@ jobs:
             --kernel-version "${{ needs.resolve-vars.outputs.kernel_tag }}" \
             --source-repo "arcbox-labs/kernel" \
             --source-ref "${{ needs.resolve-vars.outputs.kernel_tag }}" \
-            --output-dir "$PWD/dist"
+            --output-dir "$PWD/dist" \
+            --binaries-json "$PWD/dist/binaries.json"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4

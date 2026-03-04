@@ -22,6 +22,9 @@ pub struct SyncBinariesArgs {
     /// Only process these architectures (comma-separated). Default: arm64,x86_64.
     #[arg(long, value_delimiter = ',')]
     arch: Option<Vec<String>>,
+    /// Write binary manifest entries to this JSON file (for build-release --binaries-json).
+    #[arg(long)]
+    binaries_json: Option<PathBuf>,
 }
 
 impl SyncBinariesArgs {
@@ -52,22 +55,6 @@ impl SyncBinariesArgs {
                         .join(arch);
                     let dest_path = dest_dir.join(&binary.name);
 
-                    // Check if already on CDN.
-                    if let Some(ref base) = self.cdn_base_url {
-                        let r2_path = format!(
-                            "bin/{}/{}/{}/{}",
-                            binary.name, binary.version, arch, binary.name
-                        );
-                        let url = format!("{}/{}", base.trim_end_matches('/'), r2_path);
-                        if check_cdn_exists(&url).await? {
-                            println!(
-                                "  [cached] {}/{} ({arch}) — exists on CDN",
-                                binary.name, binary.version
-                            );
-                            continue;
-                        }
-                    }
-
                     // Check if already downloaded locally.
                     if dest_path.exists() {
                         println!(
@@ -77,6 +64,26 @@ impl SyncBinariesArgs {
                             dest_path.display()
                         );
                         continue;
+                    }
+
+                    // Check if already on CDN (skip download for upload purposes,
+                    // but still need a local copy for SHA256 manifest generation).
+                    if let Some(ref base) = self.cdn_base_url {
+                        let r2_path = format!(
+                            "bin/{}/{}/{}/{}",
+                            binary.name, binary.version, arch, binary.name
+                        );
+                        let url = format!("{}/{}", base.trim_end_matches('/'), r2_path);
+                        if check_cdn_exists(&url).await? {
+                            println!(
+                                "  [cdn]    {}/{} ({arch}) — downloading local copy for manifest",
+                                binary.name, binary.version
+                            );
+                            // Still download locally so build_manifest_fragment can compute SHA256.
+                            tokio::fs::create_dir_all(&dest_dir).await?;
+                            download_and_extract(&source.url, &source.extract, &dest_path).await?;
+                            continue;
+                        }
                     }
 
                     println!(
@@ -92,11 +99,21 @@ impl SyncBinariesArgs {
                 }
             }
 
-            // Print manifest fragment for convenience.
+            // Build and output manifest fragment.
+            let fragment = build_manifest_fragment(&config, &self.output, &arches)?;
+            let json = serde_json::to_string_pretty(&fragment)?;
+
+            if let Some(ref out_path) = self.binaries_json {
+                if let Some(parent) = out_path.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(out_path, &json)?;
+                println!("==> Wrote binaries manifest to {}", out_path.display());
+            }
+
             println!();
             println!("=== manifest.json binaries fragment ===");
-            let fragment = build_manifest_fragment(&config, &self.output, &arches)?;
-            println!("{}", serde_json::to_string_pretty(&fragment)?);
+            println!("{json}");
 
             Ok(())
         })

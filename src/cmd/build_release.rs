@@ -37,6 +37,9 @@ pub struct BuildReleaseArgs {
     /// Kernel version for manifest metadata.
     #[arg(long)]
     kernel_version: Option<String>,
+    /// Path to JSON file with binary entries (output of `sync-binaries`).
+    #[arg(long)]
+    binaries_json: Option<PathBuf>,
 }
 
 impl BuildReleaseArgs {
@@ -52,6 +55,7 @@ impl BuildReleaseArgs {
             source_ref: self.source_ref,
             source_sha: self.source_sha,
             kernel_version: self.kernel_version,
+            binaries_json: self.binaries_json,
         })
     }
 }
