@@ -216,7 +216,7 @@ jobs:
           retention-days: 14
 
   # ==========================================================================
-  # Stage 3: Merge per-arch manifests into unified schema v7 manifest.
+  # Stage 3: Merge per-arch manifests into unified manifest.
   # ==========================================================================
   merge-manifest:
     name: Merge Manifests
@@ -312,7 +312,7 @@ jobs:
             ### Files
             - `boot-assets-arm64-v${{ needs.resolve-vars.outputs.version }}.tar.gz` (+ `.sha256`)
             - `boot-assets-x86_64-v${{ needs.resolve-vars.outputs.version }}.tar.gz` (+ `.sha256`)
-            - `manifest.json` — unified multi-target manifest (schema v7)
+            - `manifest.json` — unified multi-target manifest
           files: |
             dist/boot-assets-arm64-v${{ needs.resolve-vars.outputs.version }}.tar.gz
             dist/boot-assets-arm64-v${{ needs.resolve-vars.outputs.version }}.tar.gz.sha256
@@ -329,7 +329,7 @@ jobs:
   #   boot-assets/
   #   ├── latest.json                     # {"version":"x.y.z"}
   #   └── v0.2.0/
-  #       ├── manifest.json               # unified schema v7
+  #       ├── manifest.json               # unified manifest
   #       ├── arm64/kernel
   #       ├── arm64/rootfs.erofs
   #       ├── x86_64/kernel

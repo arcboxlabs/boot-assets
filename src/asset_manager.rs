@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use crate::download::{ProgressCallback, PreparePhase, PrepareProgress, current_arch, download_and_verify, sha256_file};
 use crate::error::{Error, Result};
-use crate::manifest::{Manifest, SCHEMA_VERSION};
+use crate::manifest::{Manifest, schema_version_for};
 
 const DEFAULT_CDN_BASE_URL: &str = "https://dl.arcbox.dev/boot-assets";
 
@@ -87,8 +87,12 @@ impl AssetManager {
         // Step 1: Fetch and validate manifest.
         let manifest = self.fetch_manifest(&version_dir).await?;
 
-        if manifest.schema_version != SCHEMA_VERSION {
-            return Err(Error::UnsupportedSchema { version: manifest.schema_version });
+        let expected_schema = schema_version_for(&self.config.version);
+        if manifest.schema_version != expected_schema {
+            return Err(Error::UnsupportedSchema {
+                version: manifest.schema_version,
+                expected: expected_schema,
+            });
         }
 
         let target = manifest
@@ -136,8 +140,12 @@ impl AssetManager {
         tokio::fs::create_dir_all(&version_dir).await?;
 
         let manifest = self.fetch_manifest(&version_dir).await?;
-        if manifest.schema_version != SCHEMA_VERSION {
-            return Err(Error::UnsupportedSchema { version: manifest.schema_version });
+        let expected_schema = schema_version_for(&self.config.version);
+        if manifest.schema_version != expected_schema {
+            return Err(Error::UnsupportedSchema {
+                version: manifest.schema_version,
+                expected: expected_schema,
+            });
         }
 
         manifest

@@ -5,7 +5,7 @@ use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 
 use crate::rootfs::{BuildRootfsOpts, build_rootfs};
-use arcbox_boot::manifest::{Binary, FileEntry, Manifest, SCHEMA_VERSION, Target};
+use arcbox_boot::manifest::{Binary, FileEntry, Manifest, Target, schema_version_for};
 
 #[derive(Debug, Clone)]
 pub struct BuildReleaseOpts {
@@ -58,7 +58,7 @@ pub fn build_release(opts: &BuildReleaseOpts) -> Result<()> {
     let kernel_work = work.join("kernel");
     std::fs::copy(&opts.kernel_path, &kernel_work)?;
 
-    // Step 3: Generate manifest (schema v7).
+    // Step 3: Generate manifest.
     let kernel_sha256 = sha256_file(&kernel_work)?;
     let rootfs_sha256 = sha256_file(&rootfs_work)?;
     let built_at = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
@@ -86,8 +86,10 @@ pub fn build_release(opts: &BuildReleaseOpts) -> Result<()> {
     let mut targets = BTreeMap::new();
     targets.insert(opts.arch.clone(), target);
 
+    let schema_version = schema_version_for(&opts.version);
+
     let manifest = Manifest {
-        schema_version: SCHEMA_VERSION,
+        schema_version,
         asset_version: opts.version.clone(),
         built_at,
         source_repo: opts.source_repo.clone(),
@@ -97,7 +99,7 @@ pub fn build_release(opts: &BuildReleaseOpts) -> Result<()> {
         binaries: load_binaries_json(&opts.binaries_json)?,
     };
 
-    println!("==> Generating manifest.json (schema v{SCHEMA_VERSION})");
+    println!("==> Generating manifest.json (schema v{schema_version})");
     let manifest_json = serde_json::to_string_pretty(&manifest)?;
     let manifest_work = work.join("manifest.json");
     std::fs::write(&manifest_work, &manifest_json)?;
@@ -129,7 +131,7 @@ pub fn build_release(opts: &BuildReleaseOpts) -> Result<()> {
 
     println!();
     println!("========================================");
-    println!("  Boot Assets v{} (schema v{SCHEMA_VERSION})", opts.version);
+    println!("  Boot Assets v{} (schema v{schema_version})", opts.version);
     println!("========================================");
     println!();
     println!("  Tarball:  {} ({tarball_size})", tarball_path.display());
@@ -138,7 +140,7 @@ pub fn build_release(opts: &BuildReleaseOpts) -> Result<()> {
         "  Rootfs:   {rootfs_size} (EROFS, {})",
         opts.erofs_compression
     );
-    println!("  Manifest: schema_version {SCHEMA_VERSION}");
+    println!("  Manifest: schema_version {schema_version}");
     println!();
     println!(
         "  Checksum: {}",

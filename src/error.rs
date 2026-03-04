@@ -14,8 +14,8 @@ pub enum Error {
         actual: String,
     },
 
-    #[error("unsupported manifest schema version {version}, expected {}", crate::manifest::SCHEMA_VERSION)]
-    UnsupportedSchema { version: u32 },
+    #[error("unsupported manifest schema version {version}, expected {expected}")]
+    UnsupportedSchema { version: u32, expected: u32 },
 
     #[error("invalid configuration: {0}")]
     InvalidConfig(String),

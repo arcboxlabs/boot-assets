@@ -2,10 +2,19 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-/// Schema version for the new multi-target manifest format.
-pub const SCHEMA_VERSION: u32 = 7;
+/// Returns the schema version for a given asset version.
+///
+/// Schema version equals the major component of the asset version
+/// (e.g. "0.2.3" → 0, "1.0.0" → 1).
+pub fn schema_version_for(asset_version: &str) -> u32 {
+    asset_version
+        .split('.')
+        .next()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0)
+}
 
-/// Top-level boot asset manifest (schema v7).
+/// Top-level boot asset manifest.
 ///
 /// Supports multiple target architectures and host-side binaries.
 #[derive(Debug, Clone, Serialize, Deserialize)]

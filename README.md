@@ -1,12 +1,12 @@
 # ArcBox Boot Assets
 
-`boot-assets` is the single source of truth for ArcBox VM boot artifacts (schema v7).
+`boot-assets` is the single source of truth for ArcBox VM boot artifacts.
 
 Each release publishes per-architecture tarballs plus a unified multi-target manifest:
 
 1. `boot-assets-{arch}-v{version}.tar.gz`
 2. `boot-assets-{arch}-v{version}.tar.gz.sha256`
-3. `manifest.json` (schema v7, multi-target)
+3. `manifest.json` (multi-target)
 
 The tarball contains:
 
@@ -17,13 +17,15 @@ The tarball contains:
 No agent binary, no runtime binaries, no initramfs.
 Agent and runtime are distributed via VirtioFS from the host.
 
-## Manifest Schema (v7)
+## Manifest Schema
+
+`schema_version` equals the major component of `asset_version` (e.g. `0.2.0` → `0`, `1.0.0` → `1`).
 
 The manifest supports multiple target architectures and host-side binaries:
 
 ```jsonc
 {
-  "schema_version": 7,
+  "schema_version": 0,
   "asset_version": "0.2.0",
   "built_at": "2026-03-03T12:00:00Z",
   "source_repo": "arcbox-labs/kernel",
