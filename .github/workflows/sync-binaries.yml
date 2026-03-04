@@ -34,7 +34,7 @@ jobs:
           restore-keys: ${{ runner.os }}-x86_64-cargo-
 
       - name: Build CLI
-        run: cargo build --release
+        run: cargo build --release --features build --no-default-features
 
       - name: Sync binaries
         run: |
@@ -45,6 +45,7 @@ jobs:
 
       - name: Upload to Backblaze B2
         run: |
+          mkdir -p dist/bin
           aws s3 sync dist/bin/ "s3://${{ secrets.B2_BUCKET }}/bin/" \
             --endpoint-url "https://s3.${{ secrets.B2_REGION }}.backblazeb2.com" \
             --size-only
