@@ -2,6 +2,7 @@ build/
 dist/
 output/
 target/
+dev/
 
 # Prebuilt binaries — always build from source.
 *.gz
