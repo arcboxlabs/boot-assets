@@ -5,6 +5,8 @@ use clap::Args;
 use sha2::{Digest, Sha256};
 
 use arcbox_boot::upstream::UpstreamConfig;
+use arcbox_boot::upstream::UpstreamSource;
+use arcbox_boot::upstream::UpstreamSourceFormat;
 
 const ARCHES: &[&str] = &["arm64", "x86_64"];
 
@@ -81,7 +83,7 @@ impl SyncBinariesArgs {
                             );
                             // Still download locally so build_manifest_fragment can compute SHA256.
                             tokio::fs::create_dir_all(&dest_dir).await?;
-                            download_and_extract(&source.url, &source.extract, &dest_path).await?;
+                            download_source(source, &dest_path).await?;
                             continue;
                         }
                     }
@@ -92,7 +94,7 @@ impl SyncBinariesArgs {
                     );
 
                     tokio::fs::create_dir_all(&dest_dir).await?;
-                    download_and_extract(&source.url, &source.extract, &dest_path).await?;
+                    download_source(source, &dest_path).await?;
 
                     let sha = sha256_file(&dest_path)?;
                     println!("           sha256: {sha}");
@@ -117,6 +119,18 @@ impl SyncBinariesArgs {
 
             Ok(())
         })
+    }
+}
+
+async fn download_source(source: &UpstreamSource, dest: &std::path::Path) -> Result<()> {
+    match source.format {
+        UpstreamSourceFormat::Tgz => {
+            let extract_path = source.extract.as_deref().ok_or_else(|| {
+                anyhow::anyhow!("missing extract path for tgz source {}", source.url)
+            })?;
+            download_and_extract(&source.url, extract_path, dest).await
+        }
+        UpstreamSourceFormat::Binary => download_binary(&source.url, dest).await,
     }
 }
 
@@ -170,6 +184,30 @@ async fn download_and_extract(url: &str, extract_path: &str, dest: &std::path::P
     if !found {
         bail!("'{extract_path}' not found in archive from {url}");
     }
+    Ok(())
+}
+
+async fn download_binary(url: &str, dest: &std::path::Path) -> Result<()> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .build()?;
+
+    let resp = client.get(url).send().await?;
+    if !resp.status().is_success() {
+        bail!("HTTP {} for {url}", resp.status());
+    }
+
+    let bytes = resp.bytes().await?;
+    std::fs::write(dest, &bytes)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(dest)?.permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(dest, perms)?;
+    }
+
     Ok(())
 }
 

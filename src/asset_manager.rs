@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use crate::download::{ProgressCallback, PreparePhase, PrepareProgress, current_arch, download_and_verify, sha256_file};
+use crate::download::{
+    PreparePhase, PrepareProgress, ProgressCallback, current_arch, download_and_verify, sha256_file,
+};
 use crate::error::{Error, Result};
 use crate::manifest::{Manifest, schema_version_for};
 
@@ -77,10 +79,7 @@ impl AssetManager {
     /// Download manifest + kernel + rootfs if not cached.
     ///
     /// Does NOT download binaries — use [`prepare_binaries`] for that.
-    pub async fn prepare(
-        &self,
-        progress: Option<ProgressCallback>,
-    ) -> Result<PreparedAssets> {
+    pub async fn prepare(&self, progress: Option<ProgressCallback>) -> Result<PreparedAssets> {
         let version_dir = self.config.cache_dir.join(&self.config.version);
         tokio::fs::create_dir_all(&version_dir).await?;
 
@@ -111,13 +110,27 @@ impl AssetManager {
             custom.clone()
         } else {
             let dest = version_dir.join("kernel");
-            self.ensure_file(&target.kernel.path, &target.kernel.sha256, &dest, "kernel", &progress).await?;
+            self.ensure_file(
+                &target.kernel.path,
+                &target.kernel.sha256,
+                &dest,
+                "kernel",
+                &progress,
+            )
+            .await?;
             dest
         };
 
         // Step 3: Download rootfs.
         let rootfs_path = version_dir.join("rootfs.erofs");
-        self.ensure_file(&target.rootfs.path, &target.rootfs.sha256, &rootfs_path, "rootfs", &progress).await?;
+        self.ensure_file(
+            &target.rootfs.path,
+            &target.rootfs.sha256,
+            &rootfs_path,
+            "rootfs",
+            &progress,
+        )
+        .await?;
 
         Ok(PreparedAssets {
             kernel: kernel_path,
@@ -149,7 +162,12 @@ impl AssetManager {
         }
 
         manifest
-            .prepare_binaries(&self.config.arch, &self.config.cdn_base_url, dest_dir, progress)
+            .prepare_binaries(
+                &self.config.arch,
+                &self.config.cdn_base_url,
+                dest_dir,
+                progress,
+            )
             .await
     }
 
@@ -192,7 +210,10 @@ impl AssetManager {
         progress: &Option<ProgressCallback>,
     ) -> Result<()> {
         // Check cache.
-        if dest.exists() && let Ok(actual) = sha256_file(dest).await && actual == expected_sha256 {
+        if dest.exists()
+            && let Ok(actual) = sha256_file(dest).await
+            && actual == expected_sha256
+        {
             if let Some(cb) = progress {
                 cb(PrepareProgress {
                     name: name.to_string(),
@@ -244,7 +265,10 @@ impl AssetManager {
             .map_err(|e| Error::Download(format!("request failed for {url}: {e}")))?;
 
         if !response.status().is_success() {
-            return Err(Error::Download(format!("HTTP {} for {url}", response.status())));
+            return Err(Error::Download(format!(
+                "HTTP {} for {url}",
+                response.status()
+            )));
         }
 
         let temp_path = dest.with_extension("tmp");

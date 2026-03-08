@@ -56,6 +56,10 @@ The manifest supports multiple target architectures and host-side binaries:
 }
 ```
 
+`boot-assets sync-binaries` supports both tarball extraction and direct binary
+downloads. Use `format = "tgz"` plus `extract = "path/in/archive"` for archive
+sources and `format = "binary"` for direct executable URLs.
+
 ## CLI Usage
 
 The tool is built with Rust. Install with `cargo build --release`.
