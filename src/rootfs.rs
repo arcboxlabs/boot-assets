@@ -17,6 +17,7 @@ const IPTABLES_SYMLINKS: &[&str] = &[
 ];
 
 const K3S_HOST_UTILITIES: &[&str] = &["ebtables", "ethtool", "socat"];
+const EROFS_BLOCK_SIZE: &str = "4096";
 
 const MOUNT_DIRS: &[&str] = &[
     "tmp", "run", "proc", "sys", "dev", "mnt", "arcbox", "Users", "etc", "var",
@@ -179,6 +180,8 @@ ls -lh /out/busybox /out/mkfs.btrfs /out/iptables /out/ebtables /out/ethtool /ou
     }
 
     let status = Command::new("mkfs.erofs")
+        .arg("-b")
+        .arg(EROFS_BLOCK_SIZE)
         .arg(format!("-z{}", opts.compression))
         .arg(&opts.output)
         .arg(&rootfs)
@@ -192,6 +195,7 @@ ls -lh /out/busybox /out/mkfs.btrfs /out/iptables /out/ebtables /out/ethtool /ou
     println!();
     println!("==> EROFS rootfs built: {} ({size})", opts.output.display());
     println!("    Compression: {}", opts.compression);
+    println!("    Block size: {} bytes", EROFS_BLOCK_SIZE);
     println!(
         "    Contents: busybox + mkfs.btrfs + iptables-legacy + ebtables + ethtool + socat + CA certs + trampoline"
     );
