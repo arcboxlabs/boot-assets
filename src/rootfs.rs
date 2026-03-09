@@ -180,8 +180,7 @@ ls -lh /out/busybox /out/mkfs.btrfs /out/iptables /out/ebtables /out/ethtool /ou
     }
 
     let status = Command::new("mkfs.erofs")
-        .arg("-b")
-        .arg(EROFS_BLOCK_SIZE)
+        .arg(format!("-b{EROFS_BLOCK_SIZE}"))
         .arg(format!("-z{}", opts.compression))
         .arg(&opts.output)
         .arg(&rootfs)
