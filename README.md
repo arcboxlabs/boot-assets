@@ -113,9 +113,8 @@ Pipeline stages:
 Prerequisites:
 
 1. Rust toolchain
-2. Docker (for extracting static Alpine binaries)
-3. `mkfs.erofs` (`erofs-utils`)
-4. Kernel binary from [`arcboxlabs/kernel`](https://github.com/arcboxlabs/kernel) release
+2. Docker (for extracting static Alpine binaries and building the EROFS image)
+3. Kernel binary from [`arcboxlabs/kernel`](https://github.com/arcboxlabs/kernel) release
 
 ```bash
 # Build the CLI

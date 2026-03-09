@@ -18,6 +18,7 @@ const IPTABLES_SYMLINKS: &[&str] = &[
 
 const K3S_HOST_UTILITIES: &[&str] = &["ebtables", "ethtool", "socat"];
 const EROFS_BLOCK_SIZE: &str = "4096";
+const EROFS_XATTR_TOLERANCE: &str = "-1";
 
 const MOUNT_DIRS: &[&str] = &[
     "tmp", "run", "proc", "sys", "dev", "mnt", "arcbox", "Users", "etc", "var",
@@ -173,22 +174,7 @@ ls -lh /out/busybox /out/mkfs.btrfs /out/iptables /out/ebtables /out/ethtool /ou
 
     // Step 3: Create EROFS image.
     println!("==> Creating EROFS image");
-    check_mkfs_erofs()?;
-
-    if let Some(parent) = opts.output.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    let status = Command::new("mkfs.erofs")
-        .arg(format!("-b{EROFS_BLOCK_SIZE}"))
-        .arg(format!("-z{}", opts.compression))
-        .arg(&opts.output)
-        .arg(&rootfs)
-        .status()
-        .context("failed to run mkfs.erofs")?;
-    if !status.success() {
-        bail!("mkfs.erofs failed");
-    }
+    build_erofs_image_with_docker(docker_platform, &rootfs, &opts.output, &opts.compression)?;
 
     let size = humanize_size(std::fs::metadata(&opts.output)?.len());
     println!();
@@ -199,6 +185,53 @@ ls -lh /out/busybox /out/mkfs.btrfs /out/iptables /out/ebtables /out/ethtool /ou
         "    Contents: busybox + mkfs.btrfs + iptables-legacy + ebtables + ethtool + socat + CA certs + trampoline"
     );
     println!("    Core boot tools are static; k3s host utilities include required shared libs");
+
+    Ok(())
+}
+
+fn build_erofs_image_with_docker(
+    docker_platform: &str,
+    rootfs: &Path,
+    output: &Path,
+    compression: &str,
+) -> Result<()> {
+    let output_name = output
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| anyhow::anyhow!("invalid output filename: {}", output.display()))?;
+    let output_dir = output
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("output path has no parent: {}", output.display()))?;
+    std::fs::create_dir_all(output_dir)?;
+
+    let script = format!(
+        "set -e\napk add --no-cache erofs-utils >/dev/null\nmkfs.erofs {} -x{} -z{} /out/{} /rootfs\n",
+        mkfs_erofs_block_flag(),
+        EROFS_XATTR_TOLERANCE,
+        compression,
+        output_name
+    );
+
+    let status = Command::new("docker")
+        .args([
+            "run",
+            "--rm",
+            "--platform",
+            docker_platform,
+            "-v",
+            &format!("{}:/rootfs:ro", rootfs.display()),
+            "-v",
+            &format!("{}:/out", output_dir.display()),
+            "alpine:3.19",
+            "sh",
+            "-ceu",
+            &script,
+        ])
+        .status()
+        .context("failed to run docker for mkfs.erofs")?;
+    if !status.success() {
+        bail!("docker mkfs.erofs failed");
+    }
 
     Ok(())
 }
@@ -272,15 +305,8 @@ fn set_executable(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn check_mkfs_erofs() -> Result<()> {
-    match Command::new("mkfs.erofs").arg("-V").output() {
-        Ok(_) => Ok(()),
-        _ => bail!(
-            "mkfs.erofs not found. Install erofs-utils:\n  \
-             macOS:  brew install erofs-utils\n  \
-             Ubuntu: apt install erofs-utils"
-        ),
-    }
+fn mkfs_erofs_block_flag() -> String {
+    format!("-b{EROFS_BLOCK_SIZE}")
 }
 
 fn humanize_size(bytes: u64) -> String {
@@ -292,5 +318,20 @@ fn humanize_size(bytes: u64) -> String {
         format!("{:.1}K", bytes as f64 / KB as f64)
     } else {
         format!("{bytes}B")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mkfs_erofs_block_flag;
+
+    #[test]
+    fn mkfs_erofs_block_flag_uses_4k_syntax() {
+        assert_eq!(mkfs_erofs_block_flag(), "-b4096");
+    }
+
+    #[test]
+    fn erofs_xattr_tolerance_disables_xattrs() {
+        assert_eq!(EROFS_XATTR_TOLERANCE, "-1");
     }
 }
