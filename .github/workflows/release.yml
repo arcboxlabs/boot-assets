@@ -327,15 +327,15 @@ jobs:
   #
   # CDN layout (boot.arcboxcdn.com):
   #   ├── latest.json                     # {"version":"x.y.z"}
-  #   ├── asset/
-  #   │   └── v0.2.3/
-  #   │       ├── manifest.json           # unified manifest
-  #   │       ├── arm64/kernel
-  #   │       ├── arm64/rootfs.erofs
-  #   │       ├── x86_64/kernel
-  #   │       └── x86_64/rootfs.erofs
-  #   └── bin/
-  #       └── {name}/{version}/{arch}/{name}
+  #   └── asset/
+  #       └── v0.2.3/
+  #           ├── manifest.json           # unified manifest
+  #           ├── arm64/kernel
+  #           ├── arm64/rootfs.erofs
+  #           ├── x86_64/kernel
+  #           └── x86_64/rootfs.erofs
+  #
+  # Note: bin/ is managed exclusively by sync-binaries.yml
   # ==========================================================================
   upload-b2:
     name: Upload to B2
@@ -374,17 +374,6 @@ jobs:
             tar -xzf "$TARBALL" -C "$STAGING/asset/v${VERSION}/${ARCH}/" kernel rootfs.erofs
           done
           cp dist/manifest.json "$STAGING/asset/v${VERSION}/manifest.json"
-
-          # bin/{name}/{version}/{arch}/{name} (from assemble artifacts)
-          for ARCH in arm64 x86_64; do
-            if [ -f "dist/${ARCH}/binaries.json" ]; then
-              BIN_DIR="dist/${ARCH}/bin"
-              if [ -d "$BIN_DIR" ]; then
-                cp -r "$BIN_DIR"/* "$STAGING/bin/" 2>/dev/null || true
-              fi
-            fi
-          done
-          mkdir -p "$STAGING/bin"
 
           # latest.json
           printf '{"version":"%s"}\n' "$VERSION" > "$STAGING/latest.json"
