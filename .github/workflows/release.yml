@@ -396,7 +396,7 @@ jobs:
         run: |
           aws s3 sync b2-staging/ "s3://${{ secrets.B2_BUCKET }}/" \
             --endpoint-url "https://s3.${{ secrets.B2_REGION }}.backblazeb2.com" \
-            --delete --size-only
+            --size-only
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.B2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.B2_SECRET_ACCESS_KEY }}
