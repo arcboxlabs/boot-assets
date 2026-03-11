@@ -15,6 +15,9 @@ pub struct UpstreamBinary {
     pub version: String,
     /// Per-architecture source definitions.
     pub source: BTreeMap<String, UpstreamSource>,
+    /// Subdirectory under the VirtioFS share root (e.g. "kernel" → /arcbox/kernel/).
+    /// Defaults to "bin" when absent.
+    pub install_dir: Option<String>,
 }
 
 /// Where to download a binary for a specific architecture.

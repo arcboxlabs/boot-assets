@@ -59,6 +59,10 @@ pub struct Binary {
     pub version: String,
     /// Per-architecture file entries (e.g. "arm64" -> { path, sha256 }).
     pub targets: BTreeMap<String, BinaryTarget>,
+    /// Subdirectory under the VirtioFS share root (e.g. "kernel" → /arcbox/kernel/).
+    /// Defaults to "bin" when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_dir: Option<String>,
 }
 
 /// A single architecture variant of a binary.

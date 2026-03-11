@@ -252,6 +252,7 @@ fn build_manifest_fragment(
                 name: binary.name.clone(),
                 version: binary.version.clone(),
                 targets,
+                install_dir: binary.install_dir.clone(),
             });
         }
     }

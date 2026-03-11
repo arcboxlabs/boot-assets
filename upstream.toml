@@ -71,3 +71,19 @@ url = "https://github.com/k3s-io/k3s/releases/download/v1.34.3%2Bk3s1/k3s-arm64"
 [binaries.source.x86_64]
 format = "binary"
 url = "https://github.com/k3s-io/k3s/releases/download/v1.34.3%2Bk3s1/k3s"
+
+# --- Guest kernel image (for Firecracker microVMs) ---
+# Placed at /arcbox/kernel/vmlinux inside the guest VM.
+
+[[binaries]]
+name = "vmlinux"
+version = "6.1.102"
+install_dir = "kernel"
+
+[binaries.source.arm64]
+format = "binary"
+url = "https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.10/aarch64/vmlinux-6.1.102"
+
+[binaries.source.x86_64]
+format = "binary"
+url = "https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.10/x86_64/vmlinux-6.1.102"

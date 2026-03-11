@@ -49,9 +49,12 @@ impl Manifest {
 
     /// Prepare all binaries for the given architecture into `dest_dir`.
     ///
+    /// Binaries without `install_dir` are placed at `dest_dir/{name}`.
+    /// Binaries with `install_dir` are placed as siblings of `dest_dir`
+    /// (e.g. dest_dir=/arcbox/bin, install_dir="kernel" → /arcbox/kernel/{name}).
+    ///
     /// For each binary in the manifest:
-    /// 1. If the file already exists at `dest_dir/{name}` and its SHA256
-    ///    matches, skip it.
+    /// 1. If the file already exists and its SHA256 matches, skip it.
     /// 2. Otherwise, download from `{cdn_base_url}/{path}` and verify
     ///    the checksum.
     ///
@@ -69,7 +72,16 @@ impl Manifest {
         let total = self.binaries.len();
         for (idx, binary) in self.binaries.iter().enumerate() {
             let bt = binary.target_for_arch(arch)?;
-            let dest_path = dest_dir.join(&binary.name);
+            let dest_path = if let Some(ref sub) = binary.install_dir {
+                // Resolve install_dir as a sibling of dest_dir.
+                // e.g. dest_dir=/arcbox/bin/, install_dir="kernel" → /arcbox/kernel/vmlinux
+                let base = dest_dir.parent().unwrap_or(dest_dir);
+                let sub_dir = base.join(sub);
+                tokio::fs::create_dir_all(&sub_dir).await?;
+                sub_dir.join(&binary.name)
+            } else {
+                dest_dir.join(&binary.name)
+            };
 
             let pg = |phase: PreparePhase| {
                 if let Some(ref cb) = progress {
@@ -119,12 +131,17 @@ impl Manifest {
         Ok(())
     }
 
-    /// Validate that all required binaries for `arch` exist in `dest_dir`
-    /// with correct checksums.
+    /// Validate that all required binaries for `arch` exist with correct
+    /// checksums. Uses the same path resolution as [`prepare_binaries`].
     pub async fn validate_binaries(&self, arch: &str, dest_dir: &Path) -> Result<()> {
         for binary in &self.binaries {
             let bt = binary.target_for_arch(arch)?;
-            let path = dest_dir.join(&binary.name);
+            let path = if let Some(ref sub) = binary.install_dir {
+                let base = dest_dir.parent().unwrap_or(dest_dir);
+                base.join(sub).join(&binary.name)
+            } else {
+                dest_dir.join(&binary.name)
+            };
 
             if !path.exists() {
                 return Err(Error::Other(format!(

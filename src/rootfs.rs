@@ -148,7 +148,7 @@ echo "[3/{total}] iptables-legacy (static) OK"
 mkdir -p /out/lib
 cp -L /lib/ld-musl-*.so.1 /out/lib/
 for bin in {utility_out_paths}; do
-  ldd "$bin" | awk '/=>/ { print $3 } /^\// { print $1 }' | while read -r lib; do
+  ldd "$bin" | awk '/=>/ {{ print $3 }} /^\// {{ print $1 }}' | while read -r lib; do
     if [ -f "$lib" ]; then
       cp -L "$lib" "/out/lib/$(basename "$lib")"
     fi
@@ -368,6 +368,6 @@ mod tests {
 
     #[test]
     fn erofs_xattr_tolerance_disables_xattrs() {
-        assert_eq!(EROFS_XATTR_TOLERANCE, "-1");
+        assert_eq!(super::EROFS_XATTR_TOLERANCE, "-1");
     }
 }

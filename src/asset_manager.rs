@@ -141,7 +141,7 @@ impl AssetManager {
         })
     }
 
-    /// Prepare host-side binaries (dockerd, containerd, shim, runc) into `dest_dir`.
+    /// Prepare guest binaries into `dest_dir` (typically the VirtioFS bin/).
     ///
     /// Separate from [`prepare`] — call this in the runtime init phase.
     pub async fn prepare_binaries(
