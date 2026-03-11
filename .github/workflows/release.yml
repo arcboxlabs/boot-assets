@@ -327,15 +327,15 @@ jobs:
   #
   # CDN layout (boot.arcboxcdn.com):
   #   ├── latest.json                     # {"version":"x.y.z"}
-  #   └── asset/
-  #       └── v0.2.3/
-  #           ├── manifest.json           # unified manifest
-  #           ├── arm64/kernel
-  #           ├── arm64/rootfs.erofs
-  #           ├── x86_64/kernel
-  #           └── x86_64/rootfs.erofs
-  #
-  # Note: bin/ is managed exclusively by sync-binaries.yml
+  #   ├── asset/
+  #   │   └── v0.2.3/
+  #   │       ├── manifest.json           # unified manifest
+  #   │       ├── arm64/kernel
+  #   │       ├── arm64/rootfs.erofs
+  #   │       ├── x86_64/kernel
+  #   │       └── x86_64/rootfs.erofs
+  #   └── bin/                            # managed by sync-binaries.yml
+  #       └── {name}/{version}/{arch}/{name}
   # ==========================================================================
   upload-b2:
     name: Upload to B2
