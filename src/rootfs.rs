@@ -20,11 +20,16 @@ const IPTABLES_SYMLINKS: &[&str] = &[
 const CORE_STATIC_BINARIES: &[&str] = &["busybox", "mkfs.btrfs", "iptables"];
 
 const K3S_HOST_UTILITIES: &[&str] = &["ebtables", "ethtool", "socat"];
+
+/// NFS server utilities (Alpine `nfs-utils` package).
+const NFS_PACKAGES: &[&str] = &["nfs-utils"];
+const NFS_BINARIES: &[&str] = &["rpc.nfsd", "exportfs", "rpc.mountd"];
+
 const EROFS_BLOCK_SIZE: &str = "4096";
 const EROFS_XATTR_TOLERANCE: &str = "-1";
 
 const MOUNT_DIRS: &[&str] = &[
-    "tmp", "run", "proc", "sys", "dev", "mnt", "arcbox", "Users", "etc", "var",
+    "tmp", "run", "proc", "sys", "dev", "mnt", "arcbox", "Users", "etc", "var", "export",
 ];
 
 const INIT_SCRIPT: &str = r#"#!/bin/busybox sh
@@ -40,9 +45,9 @@ fn k3s_host_utilities_apk_packages() -> String {
     K3S_HOST_UTILITIES.join(" ")
 }
 
-/// Total number of binary build steps (core static + k3s host utilities).
+/// Total number of binary build steps.
 fn total_build_steps() -> usize {
-    CORE_STATIC_BINARIES.len() + K3S_HOST_UTILITIES.len()
+    CORE_STATIC_BINARIES.len() + K3S_HOST_UTILITIES.len() + NFS_BINARIES.len()
 }
 
 fn k3s_host_utilities_stage_script() -> String {
@@ -69,6 +74,34 @@ fn k3s_host_utilities_out_paths() -> String {
         .join(" ")
 }
 
+fn nfs_apk_packages() -> String {
+    NFS_PACKAGES.join(" ")
+}
+
+fn nfs_stage_script() -> String {
+    let start_index = CORE_STATIC_BINARIES.len() + K3S_HOST_UTILITIES.len() + 1;
+    let total = total_build_steps();
+    let mut script = format!(
+        "# {start_index}-{total}. NFS server utilities from Alpine packages.\nfor bin in {} ; do\n  src=\"$(command -v \"$bin\")\"\n  cp \"$src\" \"/out/$bin\"\n  case \"$bin\" in\n",
+        NFS_BINARIES.join(" ")
+    );
+    for (offset, binary) in NFS_BINARIES.iter().enumerate() {
+        script.push_str(&format!("    {binary}) idx={} ;;\n", start_index + offset));
+    }
+    script.push_str(&format!(
+        "  esac\n  echo \"[$idx/{total}] $bin OK\"\ndone\n"
+    ));
+    script
+}
+
+fn nfs_out_paths() -> String {
+    NFS_BINARIES
+        .iter()
+        .map(|binary| format!("/out/{binary}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 #[derive(Debug, Clone)]
 pub struct BuildRootfsOpts {
     pub output: PathBuf,
@@ -88,6 +121,10 @@ pub fn build_rootfs(opts: &BuildRootfsOpts) -> Result<()> {
     let utility_packages = k3s_host_utilities_apk_packages();
     let utility_stage_script = k3s_host_utilities_stage_script();
     let utility_out_paths = k3s_host_utilities_out_paths();
+    let nfs_packages = nfs_apk_packages();
+    let nfs_stage_script = nfs_stage_script();
+    let nfs_out_paths = nfs_out_paths();
+    let nfs_binaries_list = NFS_BINARIES.join(" ");
     let total = total_build_steps();
 
     // Step 1: Build core static binaries and stage packaged k3s host utilities.
@@ -104,7 +141,8 @@ apk add --no-cache \
   lzo-dev \
   zstd-dev zstd-static \
   busybox-static ca-certificates \
-  {utility_packages}
+  {utility_packages} \
+  {nfs_packages}
 
 # 1. busybox (pre-built static from Alpine)
 cp /bin/busybox.static /out/busybox
@@ -144,10 +182,12 @@ echo "[3/{total}] iptables-legacy (static) OK"
 
 {utility_stage_script}
 
+{nfs_stage_script}
+
 # Shared libraries needed by packaged utilities.
 mkdir -p /out/lib
 cp -L /lib/ld-musl-*.so.1 /out/lib/
-for bin in {utility_out_paths}; do
+for bin in {utility_out_paths} {nfs_out_paths}; do
   ldd "$bin" | awk '/=>/ {{ print $3 }} /^\// {{ print $1 }}' | while read -r lib; do
     if [ -f "$lib" ]; then
       cp -L "$lib" "/out/lib/$(basename "$lib")"
@@ -168,7 +208,7 @@ for bin in busybox mkfs.btrfs iptables; do
     echo "static OK"
   fi
 done
-for bin in {utility_packages}; do
+for bin in {utility_packages} {nfs_binaries_list}; do
   printf "  %-16s " "$bin"
   if ldd "/out/$bin" >/dev/null 2>&1; then
     echo "dynamic OK"
@@ -176,7 +216,7 @@ for bin in {utility_packages}; do
     echo "static OK"
   fi
 done
-ls -lh /out/busybox /out/mkfs.btrfs /out/iptables {utility_out_paths}
+ls -lh /out/busybox /out/mkfs.btrfs /out/iptables {utility_out_paths} {nfs_out_paths}
 "#
     );
 
@@ -214,9 +254,9 @@ ls -lh /out/busybox /out/mkfs.btrfs /out/iptables {utility_out_paths}
     println!("    Compression: {}", opts.compression);
     println!("    Block size: {} bytes", EROFS_BLOCK_SIZE);
     println!(
-        "    Contents: busybox + mkfs.btrfs + iptables-legacy + ebtables + ethtool + socat + CA certs + trampoline"
+        "    Contents: busybox + mkfs.btrfs + iptables-legacy + ebtables + ethtool + socat + nfs-utils + CA certs + trampoline"
     );
-    println!("    Core boot tools are static; k3s host utilities include required shared libs");
+    println!("    Core boot tools are static; packaged utilities include required shared libs");
 
     Ok(())
 }
@@ -237,9 +277,8 @@ fn build_erofs_image_with_docker(
     std::fs::create_dir_all(output_dir)?;
 
     // Install erofs-utils inside the container first.
-    let install_and_run = format!(
-        "apk add --no-cache erofs-utils >/dev/null && exec mkfs.erofs \"$@\"",
-    );
+    let install_and_run =
+        format!("apk add --no-cache erofs-utils >/dev/null && exec mkfs.erofs \"$@\"",);
 
     let status = Command::new("docker")
         .args([
@@ -289,6 +328,9 @@ fn build_rootfs_tree(rootfs: &Path, staging: &Path) -> Result<()> {
     for binary in K3S_HOST_UTILITIES {
         copy_executable(&staging.join(binary), &sbin_dir.join(binary))?;
     }
+    for binary in NFS_BINARIES {
+        copy_executable(&staging.join(binary), &sbin_dir.join(binary))?;
+    }
     for link in IPTABLES_SYMLINKS {
         std::os::unix::fs::symlink("iptables", sbin_dir.join(link))?;
     }
@@ -297,7 +339,7 @@ fn build_rootfs_tree(rootfs: &Path, staging: &Path) -> Result<()> {
     std::fs::write(sbin_dir.join("init"), INIT_SCRIPT)?;
     set_executable(&sbin_dir.join("init"))?;
 
-    // /lib — dynamic loader and shared libs for packaged k3s host utilities.
+    // /lib — dynamic loader and shared libs for packaged utilities.
     let lib_dir = rootfs.join("lib");
     std::fs::create_dir_all(&lib_dir)?;
     let staged_lib_dir = staging.join("lib");
