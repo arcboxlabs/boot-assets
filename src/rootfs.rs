@@ -23,7 +23,7 @@ const K3S_HOST_UTILITIES: &[&str] = &["ebtables", "ethtool", "socat"];
 
 /// NFS server utilities (Alpine `nfs-utils` package).
 const NFS_PACKAGES: &[&str] = &["nfs-utils"];
-const NFS_BINARIES: &[&str] = &["rpc.nfsd", "exportfs", "rpc.mountd"];
+const NFS_BINARIES: &[&str] = &["rpc.nfsd", "exportfs", "rpc.mountd", "nfsdcld"];
 
 const EROFS_BLOCK_SIZE: &str = "4096";
 const EROFS_XATTR_TOLERANCE: &str = "-1";
