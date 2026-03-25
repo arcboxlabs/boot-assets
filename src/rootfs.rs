@@ -52,9 +52,10 @@ fn total_build_steps() -> usize {
 
 fn k3s_host_utilities_stage_script() -> String {
     let start_index = CORE_STATIC_BINARIES.len() + 1;
+    let end_index = start_index + K3S_HOST_UTILITIES.len() - 1;
     let total = total_build_steps();
     let mut script = format!(
-        "# {start_index}-{total}. k3s host utilities from Alpine packages.\nfor bin in {} ; do\n  src=\"$(command -v \"$bin\")\"\n  cp \"$src\" \"/out/$bin\"\n  case \"$bin\" in\n",
+        "# {start_index}-{end_index}. k3s host utilities from Alpine packages.\nfor bin in {} ; do\n  src=\"$(command -v \"$bin\")\"\n  cp \"$src\" \"/out/$bin\"\n  case \"$bin\" in\n",
         k3s_host_utilities_apk_packages()
     );
     for (offset, binary) in K3S_HOST_UTILITIES.iter().enumerate() {
@@ -80,9 +81,10 @@ fn nfs_apk_packages() -> String {
 
 fn nfs_stage_script() -> String {
     let start_index = CORE_STATIC_BINARIES.len() + K3S_HOST_UTILITIES.len() + 1;
+    let end_index = start_index + NFS_BINARIES.len() - 1;
     let total = total_build_steps();
     let mut script = format!(
-        "# {start_index}-{total}. NFS server utilities from Alpine packages.\nfor bin in {} ; do\n  src=\"$(command -v \"$bin\")\"\n  cp \"$src\" \"/out/$bin\"\n  case \"$bin\" in\n",
+        "# {start_index}-{end_index}. NFS server utilities from Alpine packages.\nfor bin in {} ; do\n  src=\"$(command -v \"$bin\")\"\n  cp \"$src\" \"/out/$bin\"\n  case \"$bin\" in\n",
         NFS_BINARIES.join(" ")
     );
     for (offset, binary) in NFS_BINARIES.iter().enumerate() {
