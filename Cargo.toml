@@ -53,7 +53,7 @@ anyhow = { version = "1.0.102", optional = true }
 chrono = { version = "0.4.44", features = ["serde"], optional = true }
 clap = { version = "4.5.60", features = ["derive"], optional = true }
 flate2 = { version = "1.1.9", optional = true }
-tar = { version = "0.4.44", optional = true }
+tar = { version = "0.4.45", optional = true }
 tempfile = { version = "3.26.0", optional = true }
 toml = { version = "1.0.3", features = ["parse"] }
 
