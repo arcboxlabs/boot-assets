@@ -55,7 +55,7 @@ clap = { version = "4.5.60", features = ["derive"], optional = true }
 flate2 = { version = "1.1.9", optional = true }
 tar = { version = "0.4.44", optional = true }
 tempfile = { version = "3.26.0", optional = true }
-toml = { version = "1.0.3", features = ["parse"] }
+toml = { version = "1.1.0", features = ["parse"] }
 
 [[bin]]
 name = "boot-assets"
