@@ -16,6 +16,8 @@ on:
         description: "arcboxlabs/kernel release tag to download (e.g. v0.1.0)"
         required: true
         type: string
+  repository_dispatch:
+    types: [kernel-release]
 
 permissions:
   contents: write
@@ -35,17 +37,32 @@ jobs:
     steps:
       - name: Resolve build variables
         id: vars
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Version: manual input > tag > auto-increment from latest release
           if [ -n "${{ github.event.inputs.version }}" ]; then
             VERSION="${{ github.event.inputs.version }}"
           elif [[ "${{ github.ref }}" == refs/tags/v* ]]; then
             VERSION="${{ github.ref_name }}"
             VERSION="${VERSION#v}"
+          elif [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            # Auto-increment patch version from latest release.
+            LATEST=$(gh release view --repo "${{ github.repository }}" --json tagName -q '.tagName' 2>/dev/null || echo "v0.0.0")
+            LATEST="${LATEST#v}"
+            MAJOR=$(echo "$LATEST" | cut -d. -f1)
+            MINOR=$(echo "$LATEST" | cut -d. -f2)
+            PATCH=$(echo "$LATEST" | cut -d. -f3)
+            VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
           else
             VERSION="0.0.0-dev.${GITHUB_SHA::7}"
           fi
 
+          # Kernel tag: manual input > dispatch payload > latest
           KERNEL_TAG="${{ github.event.inputs.kernel_tag }}"
+          if [ -z "$KERNEL_TAG" ] && [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            KERNEL_TAG="${{ github.event.client_payload.kernel_tag }}"
+          fi
           if [ -z "$KERNEL_TAG" ]; then
             KERNEL_TAG="latest"
           fi
@@ -279,7 +296,7 @@ jobs:
     name: GitHub Release
     needs: [resolve-vars, assemble, merge-manifest]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'repository_dispatch'
 
     steps:
       - name: Download arm64 artifacts
@@ -303,6 +320,7 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ needs.resolve-vars.outputs.version }}
           name: Boot Assets v${{ needs.resolve-vars.outputs.version }}
           body: |
             ## Boot Assets v${{ needs.resolve-vars.outputs.version }}
@@ -341,7 +359,7 @@ jobs:
     name: Upload to B2
     needs: [resolve-vars, assemble, merge-manifest]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'repository_dispatch'
 
     steps:
       - name: Download arm64 artifacts
