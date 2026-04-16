@@ -318,7 +318,7 @@ jobs:
           path: dist
 
       - name: Publish release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ needs.resolve-vars.outputs.version }}
           name: Boot Assets v${{ needs.resolve-vars.outputs.version }}
