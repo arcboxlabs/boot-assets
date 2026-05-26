@@ -6,9 +6,9 @@
 # R2 layout: bin/{name}/{version}/{arch}/{name}
 # These are Linux static binaries shared into the guest VM via VirtioFS.
 #
-# IMPORTANT: dockerd, containerd, containerd-shim-runc-v2, and runc MUST
-# come from the same Docker static package to guarantee ABI/protocol
-# compatibility. Do NOT mix versions from different sources.
+# IMPORTANT: dockerd, containerd, containerd-shim-runc-v2, runc, and
+# docker-init MUST come from the same Docker static package to guarantee
+# ABI/protocol compatibility. Do NOT mix versions from different sources.
 
 # --- Docker static package (all 4 from same tarball) ---
 
@@ -59,6 +59,18 @@ extract = "docker/runc"
 [binaries.source.x86_64]
 url = "https://download.docker.com/linux/static/stable/x86_64/docker-27.5.1.tgz"
 extract = "docker/runc"
+
+[[binaries]]
+name = "docker-init"
+version = "27.5.1"
+
+[binaries.source.arm64]
+url = "https://download.docker.com/linux/static/stable/aarch64/docker-27.5.1.tgz"
+extract = "docker/docker-init"
+
+[binaries.source.x86_64]
+url = "https://download.docker.com/linux/static/stable/x86_64/docker-27.5.1.tgz"
+extract = "docker/docker-init"
 
 [[binaries]]
 name = "k3s"
