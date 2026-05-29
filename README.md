@@ -186,3 +186,9 @@ runtime library closure into the binary manifest. The FEX executables are patche
 to use `/arcbox/fex/lib/ld-linux-aarch64.so.1` and RPATH
 `$ORIGIN/../fex/lib`, so they do not depend on the minimal musl rootfs providing
 glibc.
+
+The x86_64 userspace rootfs is built separately with `boot-assets
+build-fex-rootfs`. It uses Debian `bookworm` via `debootstrap`, keeps the glibc
+loader/runtime and networking/TLS support needed by ordinary amd64 OCI images,
+then packages the result as `/arcbox/fex/rootfs.ero`. This replaces downloading a
+large official Fedora FEX rootfs while keeping the ArcBox VM boot rootfs small.

@@ -10,24 +10,6 @@
 # docker-init MUST come from the same Docker static package to guarantee
 # ABI/protocol compatibility. Do NOT mix versions from different sources.
 
-# --- FEX64 x86_64 userspace rootfs ---
-# FEX itself is built from source by `boot-assets build-fex-runtime` and staged
-# as /arcbox/bin/FEX plus /arcbox/bin/FEXServer. This rootfs is used by the
-# /sbin/fex64-binfmt wrapper through FEX_ROOTFS=/arcbox/fex/rootfs.ero.
-
-[[binaries]]
-name = "rootfs.ero"
-version = "fedora-43-2026-01-20"
-install_dir = "fex"
-
-[binaries.source.arm64]
-format = "binary"
-url = "https://rootfs.fex-emu.gg/Fedora_43/2026-01-20/Fedora_43.ero"
-
-[binaries.source.x86_64]
-format = "binary"
-url = "https://rootfs.fex-emu.gg/Fedora_43/2026-01-20/Fedora_43.ero"
-
 # --- Docker static package (all 4 from same tarball) ---
 
 [[binaries]]

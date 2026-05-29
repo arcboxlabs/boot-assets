@@ -146,15 +146,12 @@ url = "https://example.invalid/k3s-arm64"
             .validate(std::path::Path::new("upstream.toml"))
             .unwrap();
 
-        let fex_rootfs = config
-            .binaries
-            .iter()
-            .find(|binary| binary.name == "rootfs.ero")
-            .unwrap();
-        assert_eq!(fex_rootfs.install_dir.as_deref(), Some("fex"));
-        assert_eq!(
-            fex_rootfs.source["arm64"].format,
-            UpstreamSourceFormat::Binary
+        assert!(
+            config
+                .binaries
+                .iter()
+                .all(|binary| binary.name != "rootfs.ero"),
+            "FEX rootfs is built by build-fex-rootfs, not downloaded from upstream.toml"
         );
     }
 }
