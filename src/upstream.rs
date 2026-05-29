@@ -137,4 +137,24 @@ url = "https://example.invalid/k3s-arm64"
         assert_eq!(source.format, UpstreamSourceFormat::Binary);
         assert_eq!(source.extract, None);
     }
+
+    #[test]
+    fn repository_upstream_config_is_valid() {
+        let config: UpstreamConfig = toml::from_str(include_str!("../upstream.toml")).unwrap();
+
+        config
+            .validate(std::path::Path::new("upstream.toml"))
+            .unwrap();
+
+        let fex_rootfs = config
+            .binaries
+            .iter()
+            .find(|binary| binary.name == "rootfs.ero")
+            .unwrap();
+        assert_eq!(fex_rootfs.install_dir.as_deref(), Some("fex"));
+        assert_eq!(
+            fex_rootfs.source["arm64"].format,
+            UpstreamSourceFormat::Binary
+        );
+    }
 }

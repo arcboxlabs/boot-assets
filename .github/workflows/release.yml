@@ -164,11 +164,68 @@ jobs:
           retention-days: 1
 
   # ==========================================================================
+  # Stage 1c: Build FEX runtime from source on ARM64.
+  # ==========================================================================
+  build-fex-runtime:
+    name: Build FEX Runtime
+    needs: resolve-vars
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-fex-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-fex-cargo-
+
+      - name: Install FEX build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git build-essential cmake ninja-build pkgconf ccache \
+            clang llvm lld patchelf nasm \
+            libssl-dev libfmt-dev libxxhash-dev python3-setuptools python3-clang \
+            squashfs-tools squashfuse erofs-utils \
+            g++-x86-64-linux-gnu \
+            libgcc-13-dev-amd64-cross \
+            libgcc-13-dev-i386-cross \
+            libstdc++-13-dev-arm64-cross \
+            libstdc++-13-dev-amd64-cross \
+            libstdc++-13-dev-i386-cross
+
+      - name: Build CLI
+        run: cargo build --release --features build --no-default-features
+
+      - name: Build FEX runtime bundle
+        run: |
+          ./target/release/boot-assets build-fex-runtime \
+            --source-ref FEX-2605 \
+            --output "$PWD/dist/bin" \
+            --binaries-json "$PWD/dist/fex-binaries.json"
+
+      - name: Upload FEX runtime artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: fex-runtime
+          path: dist/
+          retention-days: 14
+
+  # ==========================================================================
   # Stage 2: Assemble per-arch tarball + single-target manifest.
   # ==========================================================================
   assemble:
     name: Assemble (${{ matrix.arch }})
-    needs: [resolve-vars, download-kernel, build-rootfs]
+    needs: [resolve-vars, download-kernel, build-rootfs, build-fex-runtime]
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -206,11 +263,35 @@ jobs:
           name: rootfs-erofs-${{ matrix.arch }}
           path: staging
 
+      - name: Download FEX runtime manifest
+        if: matrix.arch == 'arm64'
+        uses: actions/download-artifact@v8
+        with:
+          name: fex-runtime
+          path: fex-runtime
+
       - name: Sync runtime binaries
         run: |
           ./target/release/boot-assets sync-binaries \
             --arch ${{ matrix.arch }} \
             --binaries-json "$PWD/dist/binaries.json"
+
+      - name: Append FEX runtime binaries
+        if: matrix.arch == 'arm64'
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          merged = Path('dist/binaries.json')
+          fex = Path('fex-runtime/fex-binaries.json')
+          data = json.loads(merged.read_text())
+          data.extend(json.loads(fex.read_text()))
+          merged.write_text(json.dumps(data, indent=2) + '\n')
+          PY
+
+          mkdir -p dist/bin
+          cp -a fex-runtime/bin/. dist/bin/
 
       - name: Assemble release
         run: |
