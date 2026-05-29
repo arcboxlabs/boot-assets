@@ -94,6 +94,7 @@ fn configure_fex(source: &Path, build: &Path) -> Result<()> {
             "-DCMAKE_BUILD_TYPE=Release",
             "-DBUILD_TESTING=False",
             "-DBUILD_FEXCONFIG=False",
+            "-DCMAKE_DISABLE_FIND_PACKAGE_fmt=True",
             "-DENABLE_ASSERTIONS=False",
             "-DENABLE_LTO=True",
             "-DUSE_LINKER=lld",
