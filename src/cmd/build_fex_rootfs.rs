@@ -196,16 +196,17 @@ fn validate_rootfs(rootfs: &Path) -> Result<()> {
 
 fn build_erofs_image(rootfs: &Path, image: &Path, compression: &str) -> Result<()> {
     println!("==> Building FEX rootfs EROFS image");
-    let status = Command::new("mkfs.erofs")
-        .arg(format!("-z{compression}"))
-        .arg("-b4096")
-        .arg(image)
-        .arg(rootfs)
-        .status()
-        .context("failed to run mkfs.erofs for FEX rootfs")?;
-    if !status.success() {
-        bail!("mkfs.erofs failed for FEX rootfs");
-    }
+    let compression_arg = format!("-z{compression}");
+    sudo(
+        "mkfs.erofs",
+        &[
+            &compression_arg,
+            "-b4096",
+            path_str(image)?,
+            path_str(rootfs)?,
+        ],
+    )?;
+    sudo("chmod", &["0644", path_str(image)?])?;
     Ok(())
 }
 
