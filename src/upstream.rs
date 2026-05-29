@@ -151,7 +151,7 @@ url = "https://example.invalid/k3s-arm64"
                 .binaries
                 .iter()
                 .all(|binary| binary.name != "rootfs.ero"),
-            "FEX rootfs is built by build-fex-rootfs, not downloaded from upstream.toml"
+            "amd64 OCI images provide the guest rootfs; upstream.toml must not download one"
         );
     }
 }

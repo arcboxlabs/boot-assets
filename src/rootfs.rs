@@ -33,23 +33,8 @@ const MOUNT_DIRS: &[&str] = &[
 ];
 
 const FEX_BINARY: &str = "/arcbox/bin/FEX";
-const FEX_BINFMT_WRAPPER: &str = "/sbin/fex64-binfmt";
-const FEX_ROOTFS: &str = "/arcbox/fex/rootfs.ero";
-const FEX_SERVER_SOCKET: &str = "/run/fex64/fexserver.sock";
 
-const FEX_X86_64_BINFMT_ENTRY: &str = r#":FEX-x86_64:M:0:\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x3e\x00:\xff\xff\xff\xff\xff\xfe\xfe\x00\x00\x00\x00\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/sbin/fex64-binfmt:POCF"#;
-
-fn fex64_binfmt_wrapper() -> String {
-    format!(
-        r#"#!/bin/busybox sh
-export FEX_ROOTFS={FEX_ROOTFS}
-export FEX_SERVERSOCKETPATH={FEX_SERVER_SOCKET}
-export XDG_RUNTIME_DIR=/run/fex64
-/bin/busybox mkdir -p /run/fex64 /tmp
-exec {FEX_BINARY} "$@"
-"#
-    )
-}
+const FEX_X86_64_BINFMT_ENTRY: &str = r#":FEX-x86_64:M:0:\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x3e\x00:\xff\xff\xff\xff\xff\xfe\xfe\x00\x00\x00\x00\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/arcbox/bin/FEX:POCF"#;
 
 fn init_script() -> String {
     format!(
@@ -61,11 +46,11 @@ fn init_script() -> String {
 /bin/busybox mount -t virtiofs arcbox /arcbox
 
 # Register FEX64 for amd64 Linux ELF binaries when the runtime bundle provides
-# {FEX_BINARY} and {FEX_ROOTFS}. The POCF flags match upstream FEX's x86_64 binfmt entry: pass
-# the original argv[0], pass the guest binary as an opened fd, preserve file
-# credentials, and pin the interpreter at registration time. Pinning is important
-# because containers do not necessarily have /arcbox mounted in their rootfs.
-if [ -x {FEX_BINARY} ] && [ -f {FEX_ROOTFS} ]; then
+# {FEX_BINARY}. The POCF flags match upstream FEX's x86_64 binfmt entry: pass the
+# original argv[0], pass the guest binary as an opened fd, preserve file
+# credentials, and pin the interpreter at registration time. FEX_ROOTFS is left
+# unset so OCI containers use their own amd64 rootfs for guest libraries.
+if [ -x {FEX_BINARY} ]; then
   /bin/busybox mkdir -p /proc/sys/fs/binfmt_misc
   if [ ! -e /proc/sys/fs/binfmt_misc/register ]; then
     /bin/busybox mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc 2>/dev/null || true
@@ -369,11 +354,6 @@ fn build_rootfs_tree(rootfs: &Path, staging: &Path) -> Result<()> {
     std::fs::create_dir_all(&sbin_dir)?;
     copy_executable(&staging.join("mkfs.btrfs"), &sbin_dir.join("mkfs.btrfs"))?;
     copy_executable(&staging.join("iptables"), &sbin_dir.join("iptables"))?;
-    let fex_wrapper_name = FEX_BINFMT_WRAPPER
-        .strip_prefix("/sbin/")
-        .unwrap_or(FEX_BINFMT_WRAPPER);
-    std::fs::write(sbin_dir.join(fex_wrapper_name), fex64_binfmt_wrapper())?;
-    set_executable(&sbin_dir.join(fex_wrapper_name))?;
     for binary in K3S_HOST_UTILITIES {
         copy_executable(&staging.join(binary), &sbin_dir.join(binary))?;
     }
@@ -450,10 +430,7 @@ fn humanize_size(bytes: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        FEX_BINARY, FEX_BINFMT_WRAPPER, FEX_ROOTFS, FEX_X86_64_BINFMT_ENTRY, fex64_binfmt_wrapper,
-        init_script, mkfs_erofs_block_flag,
-    };
+    use super::{FEX_BINARY, FEX_X86_64_BINFMT_ENTRY, init_script, mkfs_erofs_block_flag};
 
     #[test]
     fn mkfs_erofs_block_flag_uses_4k_syntax() {
@@ -470,33 +447,22 @@ mod tests {
         assert!(FEX_X86_64_BINFMT_ENTRY.starts_with(":FEX-x86_64:M:0:"));
         assert!(FEX_X86_64_BINFMT_ENTRY.contains(r"\x7fELF\x02"));
         assert!(FEX_X86_64_BINFMT_ENTRY.contains(r"\x3e\x00"));
-        assert!(FEX_X86_64_BINFMT_ENTRY.ends_with(&format!(":{FEX_BINFMT_WRAPPER}:POCF")));
+        assert!(FEX_X86_64_BINFMT_ENTRY.ends_with(&format!(":{FEX_BINARY}:POCF")));
         assert!(!FEX_X86_64_BINFMT_ENTRY.contains('\0'));
-    }
-
-    #[test]
-    fn fex64_wrapper_sets_minimal_runtime_environment() {
-        let wrapper = fex64_binfmt_wrapper();
-
-        assert!(wrapper.contains(&format!("export FEX_ROOTFS={FEX_ROOTFS}")));
-        assert!(wrapper.contains("export FEX_SERVERSOCKETPATH=/run/fex64/fexserver.sock"));
-        assert!(wrapper.contains("export XDG_RUNTIME_DIR=/run/fex64"));
-        assert!(wrapper.contains(&format!("exec {FEX_BINARY} \"$@\"")));
     }
 
     #[test]
     fn init_script_registers_fex64_after_virtiofs_mount() {
         let script = init_script();
         let mount_arcbox = script.find("mount -t virtiofs arcbox /arcbox").unwrap();
-        let fex_check = script
-            .find(&format!("[ -x {FEX_BINARY} ] && [ -f {FEX_ROOTFS} ]"))
-            .unwrap();
+        let fex_check = script.find(&format!("[ -x {FEX_BINARY} ]")).unwrap();
         let agent_exec = script.find("exec /arcbox/bin/arcbox-agent").unwrap();
 
         assert!(mount_arcbox < fex_check);
         assert!(fex_check < agent_exec);
         assert!(script.contains("mount -t binfmt_misc binfmt_misc"));
         assert!(script.contains(FEX_X86_64_BINFMT_ENTRY));
+        assert!(!script.contains("export FEX_ROOTFS"));
         assert!(!script.contains('\0'));
     }
 }

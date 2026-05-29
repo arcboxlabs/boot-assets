@@ -223,57 +223,12 @@ jobs:
           path: dist/
           retention-days: 14
 
-  build-fex-rootfs:
-    name: Build FEX RootFS
-    needs: resolve-vars
-    runs-on: ubuntu-24.04
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache cargo
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-fex-rootfs-cargo-${{ hashFiles('Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-fex-rootfs-cargo-
-
-      - name: Install FEX rootfs build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y debootstrap erofs-utils
-
-      - name: Build CLI
-        run: cargo build --release --features build --no-default-features
-
-      - name: Build Debian FEX rootfs
-        run: |
-          ./target/release/boot-assets build-fex-rootfs \
-            --suite bookworm \
-            --version "arcbox-fex-bookworm-${{ needs.resolve-vars.outputs.version }}" \
-            --output "$PWD/dist/bin" \
-            --binaries-json "$PWD/dist/fex-rootfs-binaries.json"
-
-      - name: Upload FEX rootfs artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: fex-rootfs
-          path: dist/
-          retention-days: 14
-
   # ==========================================================================
   # Stage 2: Assemble per-arch tarball + single-target manifest.
   # ==========================================================================
   assemble:
     name: Assemble (${{ matrix.arch }})
-    needs: [resolve-vars, download-kernel, build-rootfs, build-fex-runtime, build-fex-rootfs]
+    needs: [resolve-vars, download-kernel, build-rootfs, build-fex-runtime]
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -318,20 +273,13 @@ jobs:
           name: fex-runtime
           path: fex-runtime
 
-      - name: Download FEX rootfs manifest
-        if: matrix.arch == 'arm64'
-        uses: actions/download-artifact@v8
-        with:
-          name: fex-rootfs
-          path: fex-rootfs
-
       - name: Sync runtime binaries
         run: |
           ./target/release/boot-assets sync-binaries \
             --arch ${{ matrix.arch }} \
             --binaries-json "$PWD/dist/binaries.json"
 
-      - name: Append FEX binary artifacts
+      - name: Append FEX runtime binaries
         if: matrix.arch == 'arm64'
         run: |
           python3 - <<'PY'
@@ -340,17 +288,12 @@ jobs:
 
           merged = Path('dist/binaries.json')
           data = json.loads(merged.read_text())
-          for fragment in [
-              Path('fex-runtime/fex-binaries.json'),
-              Path('fex-rootfs/fex-rootfs-binaries.json'),
-          ]:
-              data.extend(json.loads(fragment.read_text()))
+          data.extend(json.loads(Path('fex-runtime/fex-binaries.json').read_text()))
           merged.write_text(json.dumps(data, indent=2) + '\n')
           PY
 
           mkdir -p dist/bin
           cp -a fex-runtime/bin/. dist/bin/
-          cp -a fex-rootfs/bin/. dist/bin/
 
       - name: Assemble release
         run: |
