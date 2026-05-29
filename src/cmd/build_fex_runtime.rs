@@ -97,6 +97,8 @@ fn configure_fex(source: &Path, build: &Path) -> Result<()> {
             "-DENABLE_LTO=True",
             "-DUSE_LINKER=lld",
         ])
+        .env("CC", "clang")
+        .env("CXX", "clang++")
         .status()
         .context("failed to run cmake for FEX")?;
     if !status.success() {
