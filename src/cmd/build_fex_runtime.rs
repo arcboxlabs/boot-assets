@@ -93,6 +93,7 @@ fn configure_fex(source: &Path, build: &Path) -> Result<()> {
             "-DCMAKE_INSTALL_PREFIX=/usr",
             "-DCMAKE_BUILD_TYPE=Release",
             "-DBUILD_TESTING=False",
+            "-DBUILD_FEXCONFIG=False",
             "-DENABLE_ASSERTIONS=False",
             "-DENABLE_LTO=True",
             "-DUSE_LINKER=lld",
