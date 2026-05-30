@@ -156,12 +156,13 @@ Output files are written to `dist/`.
 ## FEX64 binfmt hook
 
 The rootfs does not embed FEX itself. During boot, `/sbin/init` mounts the
-`arcbox` VirtioFS share and checks for `/arcbox/bin/FEX`. If present, it mounts
-`binfmt_misc` and registers the upstream FEX x86_64 ELF handler with `POCF`
-flags:
+`arcbox` VirtioFS share and checks for `/arcbox/runtime/bin/FEX` (the
+`ARCBOX_RUNTIME_BIN_DIR` location ArcBox installs runtime binaries into,
+alongside `dockerd`/`containerd`). If present, it mounts `binfmt_misc` and
+registers the upstream FEX x86_64 ELF handler with `POCF` flags:
 
 ```text
-:FEX-x86_64:M:0:\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x3e\x00:\xff\xff\xff\xff\xff\xfe\xfe\x00\x00\x00\x00\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/arcbox/bin/FEX:POCF
+:FEX-x86_64:M:0:\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x3e\x00:\xff\xff\xff\xff\xff\xfe\xfe\x00\x00\x00\x00\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/arcbox/runtime/bin/FEX:POCF
 ```
 
 The registered interpreter is the arm64 FEX binary itself. `FEX_ROOTFS` is not
@@ -172,8 +173,10 @@ visible inside the container rootfs. If FEX is absent, boot continues normally
 and no x86_64 handler is registered.
 
 FEX is built from source in the release workflow with `boot-assets
-build-fex-runtime`. The command stages `FEX`, `FEXServer`, and the dynamic
-runtime library closure into the binary manifest. The FEX executables are patched
-to use `/arcbox/fex/lib/ld-linux-aarch64.so.1` and RPATH
-`$ORIGIN/../fex/lib`, so they do not depend on the minimal musl rootfs providing
-glibc.
+build-fex-runtime`. The command builds FEX **statically** (`-static`) and stages
+`FEX` and `FEXServer` into the binary manifest — no dynamic library closure is
+shipped. Static linking is required: the `F` flag pins only the interpreter
+executable's fd into the container namespace, so a *dynamic* FEX would have the
+kernel resolve its `PT_INTERP` against the container's amd64 rootfs (which lacks
+FEX's arm64 loader) and fail with `ENOENT`. The build asserts the produced
+binaries carry no `PT_INTERP` (`assert_static_executable`).
