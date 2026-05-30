@@ -22,6 +22,10 @@ on:
   repository_dispatch:
     types: [kernel-release]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: write
 
@@ -475,6 +479,16 @@ jobs:
             tar -xzf "$TARBALL" -C "$STAGING/asset/v${VERSION}/${ARCH}/" kernel rootfs.erofs
           done
           cp dist/manifest.json "$STAGING/asset/v${VERSION}/manifest.json"
+
+          # Host-side binaries advertised by manifest.json. Most are normally
+          # managed by sync-binaries.yml, but FEX is built from source in this
+          # workflow and only exists in the arm64 release artifact.
+          mkdir -p "$STAGING/bin"
+          for ARCH in arm64 x86_64; do
+            if [ -d "dist/${ARCH}/bin" ]; then
+              cp -a "dist/${ARCH}/bin/." "$STAGING/bin/"
+            fi
+          done
 
           # latest.json
           printf '{"version":"%s"}\n' "$VERSION" > "$STAGING/latest.json"
