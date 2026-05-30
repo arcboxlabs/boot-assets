@@ -137,4 +137,21 @@ url = "https://example.invalid/k3s-arm64"
         assert_eq!(source.format, UpstreamSourceFormat::Binary);
         assert_eq!(source.extract, None);
     }
+
+    #[test]
+    fn repository_upstream_config_is_valid() {
+        let config: UpstreamConfig = toml::from_str(include_str!("../upstream.toml")).unwrap();
+
+        config
+            .validate(std::path::Path::new("upstream.toml"))
+            .unwrap();
+
+        assert!(
+            config
+                .binaries
+                .iter()
+                .all(|binary| binary.name != "rootfs.ero"),
+            "amd64 OCI images provide the guest rootfs; upstream.toml must not download one"
+        );
+    }
 }

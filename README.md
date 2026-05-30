@@ -11,7 +11,7 @@ Each release publishes per-architecture tarballs plus a unified multi-target man
 The tarball contains:
 
 1. `kernel` — pre-built Linux kernel from [`arcboxlabs/kernel`](https://github.com/arcboxlabs/kernel) (all drivers built-in, `CONFIG_MODULES=n`)
-2. `rootfs.erofs` — minimal read-only rootfs (busybox + mkfs.btrfs + iptables-legacy + ebtables + ethtool + socat + CA certs)
+2. `rootfs.erofs` — minimal read-only rootfs (busybox + mkfs.btrfs + iptables-legacy + ebtables + ethtool + socat + CA certs + optional FEX64 binfmt registration)
 3. `manifest.json` — per-arch manifest (merged into unified manifest at release time)
 
 No agent binary in the boot tarball, and no initramfs.
@@ -139,7 +139,7 @@ Output files are written to `dist/`.
 ├── bin/
 │   └── busybox          # Static busybox (+ symlinks: sh, mount, mkdir, ...)
 ├── sbin/
-│   ├── init             # Trampoline: mount /proc /sys /dev → mount VirtioFS → exec agent
+│   ├── init             # Trampoline: mount /proc /sys /dev → mount VirtioFS → register FEX64 if available → exec agent
 │   ├── mkfs.btrfs       # Btrfs formatter (first-boot data disk)
 │   ├── iptables         # iptables-legacy (Docker bridge networking)
 │   ├── ebtables         # bridge filter utility used by K3s
@@ -152,3 +152,28 @@ Output files are written to `dist/`.
 │   └── ca-certificates.crt
 └── (mount points)       # tmp/ run/ proc/ sys/ dev/ mnt/ arcbox/ Users/ etc/ var/
 ```
+
+## FEX64 binfmt hook
+
+The rootfs does not embed FEX itself. During boot, `/sbin/init` mounts the
+`arcbox` VirtioFS share and checks for `/arcbox/bin/FEX`. If present, it mounts
+`binfmt_misc` and registers the upstream FEX x86_64 ELF handler with `POCF`
+flags:
+
+```text
+:FEX-x86_64:M:0:\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x3e\x00:\xff\xff\xff\xff\xff\xfe\xfe\x00\x00\x00\x00\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/arcbox/bin/FEX:POCF
+```
+
+The registered interpreter is the arm64 FEX binary itself. `FEX_ROOTFS` is not
+set: amd64 OCI containers provide their own amd64 rootfs, loader, and shared
+libraries. The `F` flag pins the opened interpreter at registration time so
+x86_64 container processes can still invoke it even when `/arcbox` is not
+visible inside the container rootfs. If FEX is absent, boot continues normally
+and no x86_64 handler is registered.
+
+FEX is built from source in the release workflow with `boot-assets
+build-fex-runtime`. The command stages `FEX`, `FEXServer`, and the dynamic
+runtime library closure into the binary manifest. The FEX executables are patched
+to use `/arcbox/fex/lib/ld-linux-aarch64.so.1` and RPATH
+`$ORIGIN/../fex/lib`, so they do not depend on the minimal musl rootfs providing
+glibc.

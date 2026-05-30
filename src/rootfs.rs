@@ -32,14 +32,42 @@ const MOUNT_DIRS: &[&str] = &[
     "tmp", "run", "proc", "sys", "dev", "mnt", "arcbox", "Users", "etc", "var", "export",
 ];
 
-const INIT_SCRIPT: &str = r#"#!/bin/busybox sh
+const FEX_BINARY: &str = "/arcbox/bin/FEX";
+
+const FEX_X86_64_BINFMT_ENTRY: &str = r#":FEX-x86_64:M:0:\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x3e\x00:\xff\xff\xff\xff\xff\xfe\xfe\x00\x00\x00\x00\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/arcbox/bin/FEX:POCF"#;
+
+fn init_script() -> String {
+    format!(
+        r#"#!/bin/busybox sh
 /bin/busybox mount -t proc proc /proc
 /bin/busybox mount -t sysfs sysfs /sys
 /bin/busybox mount -t devtmpfs devtmpfs /dev
 /bin/busybox mkdir -p /arcbox
 /bin/busybox mount -t virtiofs arcbox /arcbox
+
+# Register FEX64 for amd64 Linux ELF binaries when the runtime bundle provides
+# {FEX_BINARY}. The POCF flags match upstream FEX's x86_64 binfmt entry: pass the
+# original argv[0], pass the guest binary as an opened fd, preserve file
+# credentials, and pin the interpreter at registration time. FEX_ROOTFS is left
+# unset so OCI containers use their own amd64 rootfs for guest libraries.
+if [ -x {FEX_BINARY} ]; then
+  /bin/busybox mkdir -p /proc/sys/fs/binfmt_misc
+  if [ ! -e /proc/sys/fs/binfmt_misc/register ]; then
+    /bin/busybox mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc 2>/dev/null || true
+  fi
+  if [ -e /proc/sys/fs/binfmt_misc/register ]; then
+    if [ -e /proc/sys/fs/binfmt_misc/FEX-x86_64 ]; then
+      /bin/busybox echo -1 > /proc/sys/fs/binfmt_misc/FEX-x86_64 2>/dev/null || true
+    fi
+    /bin/busybox ln -snf /proc/self/fd /dev/fd
+    /bin/busybox printf '%s\n' '{FEX_X86_64_BINFMT_ENTRY}' > /proc/sys/fs/binfmt_misc/register 2>/dev/null || true
+  fi
+fi
+
 exec /arcbox/bin/arcbox-agent
-"#;
+"#
+    )
+}
 
 fn k3s_host_utilities_apk_packages() -> String {
     K3S_HOST_UTILITIES.join(" ")
@@ -279,8 +307,7 @@ fn build_erofs_image_with_docker(
     std::fs::create_dir_all(output_dir)?;
 
     // Install erofs-utils inside the container first.
-    let install_and_run =
-        format!("apk add --no-cache erofs-utils >/dev/null && exec mkfs.erofs \"$@\"",);
+    let install_and_run = "apk add --no-cache erofs-utils >/dev/null && exec mkfs.erofs \"$@\"";
 
     let status = Command::new("docker")
         .args([
@@ -295,7 +322,7 @@ fn build_erofs_image_with_docker(
             "alpine:3.19",
             "sh",
             "-c",
-            &install_and_run,
+            install_and_run,
             // Everything after here becomes positional args ($@) for mkfs.erofs.
             "--",
         ])
@@ -338,7 +365,7 @@ fn build_rootfs_tree(rootfs: &Path, staging: &Path) -> Result<()> {
     }
 
     // /sbin/init — trampoline
-    std::fs::write(sbin_dir.join("init"), INIT_SCRIPT)?;
+    std::fs::write(sbin_dir.join("init"), init_script())?;
     set_executable(&sbin_dir.join("init"))?;
 
     // /lib — dynamic loader and shared libs for packaged utilities.
@@ -403,7 +430,7 @@ fn humanize_size(bytes: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::mkfs_erofs_block_flag;
+    use super::{FEX_BINARY, FEX_X86_64_BINFMT_ENTRY, init_script, mkfs_erofs_block_flag};
 
     #[test]
     fn mkfs_erofs_block_flag_uses_4k_syntax() {
@@ -413,5 +440,29 @@ mod tests {
     #[test]
     fn erofs_xattr_tolerance_disables_xattrs() {
         assert_eq!(super::EROFS_XATTR_TOLERANCE, "-1");
+    }
+
+    #[test]
+    fn fex64_binfmt_entry_matches_upstream_shape() {
+        assert!(FEX_X86_64_BINFMT_ENTRY.starts_with(":FEX-x86_64:M:0:"));
+        assert!(FEX_X86_64_BINFMT_ENTRY.contains(r"\x7fELF\x02"));
+        assert!(FEX_X86_64_BINFMT_ENTRY.contains(r"\x3e\x00"));
+        assert!(FEX_X86_64_BINFMT_ENTRY.ends_with(&format!(":{FEX_BINARY}:POCF")));
+        assert!(!FEX_X86_64_BINFMT_ENTRY.contains('\0'));
+    }
+
+    #[test]
+    fn init_script_registers_fex64_after_virtiofs_mount() {
+        let script = init_script();
+        let mount_arcbox = script.find("mount -t virtiofs arcbox /arcbox").unwrap();
+        let fex_check = script.find(&format!("[ -x {FEX_BINARY} ]")).unwrap();
+        let agent_exec = script.find("exec /arcbox/bin/arcbox-agent").unwrap();
+
+        assert!(mount_arcbox < fex_check);
+        assert!(fex_check < agent_exec);
+        assert!(script.contains("mount -t binfmt_misc binfmt_misc"));
+        assert!(script.contains(FEX_X86_64_BINFMT_ENTRY));
+        assert!(!script.contains("export FEX_ROOTFS"));
+        assert!(!script.contains('\0'));
     }
 }
