@@ -12,9 +12,6 @@ const DEFAULT_FEX_REPO: &str = "https://github.com/FEX-Emu/FEX.git";
 const DEFAULT_FEX_REF: &str = "FEX-2605";
 const FEX_ARCH: &str = "arm64";
 const FEX_BINARIES: &[&str] = &["FEX", "FEXServer"];
-const FEX_LIB_DIR: &str = "fex/lib";
-const FEX_RPATH: &str = "$ORIGIN/../fex/lib";
-const FEX_INTERPRETER: &str = "/arcbox/fex/lib/ld-linux-aarch64.so.1";
 
 #[derive(Args)]
 pub struct BuildFexRuntimeArgs {
@@ -94,10 +91,22 @@ fn configure_fex(source: &Path, build: &Path) -> Result<()> {
             "-DCMAKE_BUILD_TYPE=Release",
             "-DBUILD_TESTING=False",
             "-DBUILD_FEXCONFIG=False",
+            // Use FEX's bundled fmt rather than the system shared library so the
+            // `-static` link consumes a static archive. FEX resolves xxHash via
+            // `find_library` (not `find_package`), so it cannot be bundled this
+            // way; the release workflow instead installs a static `libxxhash.a`
+            // and removes the shared `.so` before this build.
             "-DCMAKE_DISABLE_FIND_PACKAGE_fmt=True",
             "-DENABLE_ASSERTIONS=False",
             "-DENABLE_LTO=True",
             "-DUSE_LINKER=lld",
+            // Statically link FEX so the binfmt-pinned interpreter has no
+            // external loader/library dependencies. Required for execution
+            // inside OCI container mount namespaces, which do not expose
+            // /arcbox: a dynamic FEX would have the kernel resolve its
+            // PT_INTERP against the container rootfs and fail with ENOENT.
+            // `stage_fex_runtime` enforces this with `assert_static_executable`.
+            "-DCMAKE_EXE_LINKER_FLAGS=-static",
         ])
         .env("CC", "clang")
         .env("CXX", "clang++")
@@ -138,89 +147,65 @@ fn build_and_install_fex(build: &Path, install: &Path) -> Result<()> {
 fn stage_fex_runtime(install: &Path, output: &Path, version: &str) -> Result<Vec<Binary>> {
     let install_usr_bin = install.join("usr/bin");
     let mut entries = Vec::new();
-    let mut closure_inputs = Vec::new();
 
     for binary in FEX_BINARIES {
         let src = install_usr_bin.join(binary);
         if !src.is_file() {
             bail!("FEX install did not produce {}", src.display());
         }
-        closure_inputs.push(src);
-    }
-
-    let libs = collect_runtime_libraries(&closure_inputs)?;
-
-    for src in &closure_inputs {
-        patch_fex_executable(src)?;
+        // FEX is statically linked (see `configure_fex`), so there is no
+        // loader/library closure to stage and the binfmt-pinned interpreter
+        // is self-contained inside OCI container namespaces. Fail loudly if
+        // the build silently produced a dynamic binary.
+        assert_static_executable(&src)?;
         let name = src
             .file_name()
             .and_then(|name| name.to_str())
             .ok_or_else(|| anyhow::anyhow!("invalid FEX binary filename: {}", src.display()))?;
-        entries.push(stage_file(output, version, name, None, src)?);
-    }
-
-    for lib in libs {
-        let name = lib
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or_else(|| anyhow::anyhow!("invalid library filename: {}", lib.display()))?;
-        entries.push(stage_file(output, version, name, Some(FEX_LIB_DIR), &lib)?);
+        entries.push(stage_file(output, version, name, None, &src)?);
     }
 
     Ok(entries)
 }
 
-fn patch_fex_executable(path: &Path) -> Result<()> {
-    let status = Command::new("patchelf")
-        .args([
-            "--set-interpreter",
-            FEX_INTERPRETER,
-            "--set-rpath",
-            FEX_RPATH,
-        ])
-        .arg(path)
-        .status()
-        .with_context(|| format!("failed to run patchelf for {}", path.display()))?;
-    if !status.success() {
-        bail!("patchelf failed for {}", path.display());
+/// Fails if `path` is a dynamically-linked ELF (carries a `PT_INTERP`).
+///
+/// A dynamic FEX cannot serve as a `binfmt_misc` interpreter inside an OCI
+/// container: the kernel resolves the interpreter's `PT_INTERP` against the
+/// container's mount namespace (the amd64 image rootfs), which does not
+/// contain FEX's loader, so exec fails with `ENOENT`. The static link in
+/// [`configure_fex`] removes that dependency; this guard ensures it actually
+/// took effect.
+///
+/// A missing or failing `readelf` is treated as non-fatal (the build does not
+/// hard-fail on absent tooling), but a confirmed dynamic binary is an error.
+fn assert_static_executable(path: &Path) -> Result<()> {
+    let output = match Command::new("readelf").arg("-l").arg(path).output() {
+        Ok(output) if output.status.success() => output,
+        Ok(_) => {
+            eprintln!(
+                "warning: readelf failed for {}; skipping static-link check",
+                path.display()
+            );
+            return Ok(());
+        }
+        Err(e) => {
+            eprintln!(
+                "warning: could not run readelf to verify {} is static: {e}",
+                path.display()
+            );
+            return Ok(());
+        }
+    };
+
+    if String::from_utf8_lossy(&output.stdout).contains("INTERP") {
+        bail!(
+            "{} is dynamically linked (has PT_INTERP); FEX must be statically \
+             linked to work as a binfmt_misc interpreter inside containers",
+            path.display()
+        );
     }
     Ok(())
-}
-
-fn collect_runtime_libraries(executables: &[PathBuf]) -> Result<Vec<PathBuf>> {
-    let mut libs = BTreeMap::new();
-    for executable in executables {
-        let output = Command::new("ldd")
-            .arg(executable)
-            .output()
-            .with_context(|| format!("failed to run ldd for {}", executable.display()))?;
-        if !output.status.success() {
-            bail!("ldd failed for {}", executable.display());
-        }
-
-        let stdout = String::from_utf8(output.stdout).context("ldd output was not UTF-8")?;
-        for line in stdout.lines() {
-            if let Some(path) = parse_ldd_library(line) {
-                libs.insert(path.clone(), path);
-            }
-        }
-    }
-    Ok(libs.into_values().collect())
-}
-
-fn parse_ldd_library(line: &str) -> Option<PathBuf> {
-    let trimmed = line.trim();
-    if trimmed.is_empty() || trimmed.starts_with("linux-vdso") {
-        return None;
-    }
-
-    if let Some((_, rest)) = trimmed.split_once("=>") {
-        let path = rest.split_whitespace().next()?;
-        return path.starts_with('/').then(|| PathBuf::from(path));
-    }
-
-    let path = trimmed.split_whitespace().next()?;
-    path.starts_with('/').then(|| PathBuf::from(path))
 }
 
 fn stage_file(
@@ -289,34 +274,4 @@ fn sha256_file(path: &Path) -> Result<String> {
 fn path_str(path: &Path) -> Result<&str> {
     path.to_str()
         .ok_or_else(|| anyhow::anyhow!("path is not valid UTF-8: {}", path.display()))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::parse_ldd_library;
-
-    #[test]
-    fn parses_ldd_arrow_paths() {
-        assert_eq!(
-            parse_ldd_library("libc.so.6 => /lib/aarch64-linux-gnu/libc.so.6 (0x123)")
-                .unwrap()
-                .to_str(),
-            Some("/lib/aarch64-linux-gnu/libc.so.6")
-        );
-    }
-
-    #[test]
-    fn parses_ldd_loader_paths() {
-        assert_eq!(
-            parse_ldd_library("/lib/ld-linux-aarch64.so.1 (0x123)")
-                .unwrap()
-                .to_str(),
-            Some("/lib/ld-linux-aarch64.so.1")
-        );
-    }
-
-    #[test]
-    fn ignores_vdso() {
-        assert!(parse_ldd_library("linux-vdso.so.1 (0x0000)").is_none());
-    }
 }

@@ -32,9 +32,12 @@ const MOUNT_DIRS: &[&str] = &[
     "tmp", "run", "proc", "sys", "dev", "mnt", "arcbox", "Users", "etc", "var", "export",
 ];
 
-const FEX_BINARY: &str = "/arcbox/bin/FEX";
+// FEX is delivered as an ArcBox runtime binary, so it lands in the guest under
+// `/arcbox/runtime/bin/` (the `ARCBOX_RUNTIME_BIN_DIR` convention shared with
+// `dockerd`/`containerd`), alongside the VirtioFS `arcbox` share root.
+const FEX_BINARY: &str = "/arcbox/runtime/bin/FEX";
 
-const FEX_X86_64_BINFMT_ENTRY: &str = r#":FEX-x86_64:M:0:\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x3e\x00:\xff\xff\xff\xff\xff\xfe\xfe\x00\x00\x00\x00\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/arcbox/bin/FEX:POCF"#;
+const FEX_X86_64_BINFMT_ENTRY: &str = r#":FEX-x86_64:M:0:\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x3e\x00:\xff\xff\xff\xff\xff\xfe\xfe\x00\x00\x00\x00\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/arcbox/runtime/bin/FEX:POCF"#;
 
 fn init_script() -> String {
     format!(
