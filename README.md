@@ -180,3 +180,10 @@ executable's fd into the container namespace, so a *dynamic* FEX would have the
 kernel resolve its `PT_INTERP` against the container's amd64 rootfs (which lacks
 FEX's arm64 loader) and fail with `ENOENT`. The build asserts the produced
 binaries carry no `PT_INTERP` (`assert_static_executable`).
+
+The build also pins `-DTUNE_CPU=apple-m1`. FEX defaults `TUNE_CPU=native`, which
+tunes for the SVE-capable aarch64 CI runner and emits SVE instructions (e.g.
+`cnth`); Apple Silicon (M1–M4) has no SVE, so the interpreter would die with
+`SIGILL` on first use. `apple-m1` is the deployment floor every supported Mac
+satisfies, and the build asserts no SVE instruction leaked into the binaries
+(`assert_no_sve_instructions`).
