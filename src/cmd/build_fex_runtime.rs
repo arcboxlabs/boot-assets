@@ -91,17 +91,22 @@ fn configure_fex(source: &Path, build: &Path) -> Result<()> {
             "-DCMAKE_BUILD_TYPE=Release",
             "-DBUILD_TESTING=False",
             "-DBUILD_FEXCONFIG=False",
-            // Target the Apple Silicon baseline (M1) for FEX's own host code.
-            // FEX defaults `TUNE_CPU=native`, tuning for the build machine — the
-            // SVE-capable aarch64 CI runner — so the compiler emits SVE
-            // instructions (e.g. `cnth`) into FEX's binary. Apple Silicon
-            // (M1–M4) implements NEON but not SVE, so such an instruction is
-            // illegal and the FEX interpreter dies with SIGILL the moment it
-            // runs. `apple-m1` is the deployment floor every supported Mac
-            // satisfies; FEX's own `NeedDisabledSVE.py` does not cover this
-            // build-host≠run-host case. `stage_fex_runtime` enforces the result
-            // with `assert_no_sve_instructions`.
+            // Force the Apple Silicon baseline (M1) and forbid SVE across FEX's
+            // own code AND every bundled dependency. FEX defaults
+            // `TUNE_CPU=native`, tuning for the build machine — the SVE-capable
+            // aarch64 CI runner — so the compiler emits SVE instructions (e.g.
+            // `cnth`/`cntd`). Apple Silicon (M1–M4) has no SVE, so such an
+            // instruction is illegal and the FEX interpreter dies with SIGILL on
+            // first use. `TUNE_CPU` only tunes FEX's own targets (and stops FEX
+            // re-adding `-mcpu=native`), so we ALSO pin `-mcpu=apple-m1` globally
+            // to cover bundled External libraries, and disable LTO below so
+            // per-TU targeting stays authoritative — link-time codegen could
+            // otherwise re-introduce SVE. FEX's own `NeedDisabledSVE.py` does not
+            // cover this build-host≠run-host case. `stage_fex_runtime` enforces
+            // the result with `assert_no_sve_instructions`.
             "-DTUNE_CPU=apple-m1",
+            "-DCMAKE_C_FLAGS=-mcpu=apple-m1",
+            "-DCMAKE_CXX_FLAGS=-mcpu=apple-m1",
             // Use FEX's bundled fmt rather than the system shared library so the
             // `-static` link consumes a static archive. FEX resolves xxHash via
             // `find_library` (not `find_package`), so it cannot be bundled this
@@ -109,7 +114,10 @@ fn configure_fex(source: &Path, build: &Path) -> Result<()> {
             // and removes the shared `.so` before this build.
             "-DCMAKE_DISABLE_FIND_PACKAGE_fmt=True",
             "-DENABLE_ASSERTIONS=False",
-            "-DENABLE_LTO=True",
+            // LTO disabled so each TU's `-mcpu=apple-m1` targeting is
+            // authoritative; whole-program codegen could otherwise re-introduce
+            // SVE (see the TUNE_CPU note above).
+            "-DENABLE_LTO=False",
             "-DUSE_LINKER=lld",
             // Statically link FEX so the binfmt-pinned interpreter has no
             // external loader/library dependencies. Required for execution
