@@ -181,9 +181,13 @@ kernel resolve its `PT_INTERP` against the container's amd64 rootfs (which lacks
 FEX's arm64 loader) and fail with `ENOENT`. The build asserts the produced
 binaries carry no `PT_INTERP` (`assert_static_executable`).
 
-The build also pins `-DTUNE_CPU=apple-m1`. FEX defaults `TUNE_CPU=native`, which
-tunes for the SVE-capable aarch64 CI runner and emits SVE instructions (e.g.
-`cnth`); Apple Silicon (M1–M4) has no SVE, so the interpreter would die with
-`SIGILL` on first use. `apple-m1` is the deployment floor every supported Mac
-satisfies, and the build asserts no SVE instruction leaked into the binaries
-(`assert_no_sve_instructions`).
+The build also targets the Apple Silicon baseline so no SVE is emitted. FEX
+defaults `TUNE_CPU=native`, which tunes for the SVE-capable aarch64 CI runner
+and bakes SVE instructions (e.g. `cnth`) into FEX's own code; Apple Silicon
+(M1–M4) has no SVE, so the interpreter dies with `SIGILL` on first use. The build
+pins `-DTUNE_CPU=apple-m1` (FEX's own targets) plus `-mcpu=apple-m1` globally
+(bundled External libraries) and disables LTO so per-TU targeting stays
+authoritative. `assert_no_sve_instructions` then verifies the result, scoped to
+FEX-compiled functions by symbol — statically-linked glibc legitimately carries
+ifunc-selected SVE `memcpy`/`str*` routines that are dead code on a non-SVE host,
+so only SVE inside FEX's own code is a failure.
