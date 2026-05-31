@@ -172,6 +172,14 @@ fn stage_fex_runtime(install: &Path, output: &Path, version: &str) -> Result<Vec
         if !src.is_file() {
             bail!("FEX install did not produce {}", src.display());
         }
+        let name = src
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| anyhow::anyhow!("invalid FEX binary filename: {}", src.display()))?;
+        // Stage to the output dir first, then validate, so CI can upload the
+        // binary as a debugging artifact even when a guard rejects it (the
+        // failed job still blocks the release).
+        let entry = stage_file(output, version, name, None, &src)?;
         // FEX is statically linked (see `configure_fex`), so there is no
         // loader/library closure to stage and the binfmt-pinned interpreter
         // is self-contained inside OCI container namespaces. Fail loudly if
@@ -182,11 +190,7 @@ fn stage_fex_runtime(install: &Path, output: &Path, version: &str) -> Result<Vec
         // otherwise the interpreter SIGILLs the first time it runs (see
         // `configure_fex`).
         assert_no_sve_instructions(&src)?;
-        let name = src
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or_else(|| anyhow::anyhow!("invalid FEX binary filename: {}", src.display()))?;
-        entries.push(stage_file(output, version, name, None, &src)?);
+        entries.push(entry);
     }
 
     Ok(entries)
