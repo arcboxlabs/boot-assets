@@ -91,6 +91,22 @@ fn configure_fex(source: &Path, build: &Path) -> Result<()> {
             "-DCMAKE_BUILD_TYPE=Release",
             "-DBUILD_TESTING=False",
             "-DBUILD_FEXCONFIG=False",
+            // Force the Apple Silicon baseline (M1) and forbid SVE across FEX's
+            // own code AND every bundled dependency. FEX defaults
+            // `TUNE_CPU=native`, tuning for the build machine — the SVE-capable
+            // aarch64 CI runner — so the compiler emits SVE instructions (e.g.
+            // `cnth`/`cntd`). Apple Silicon (M1–M4) has no SVE, so such an
+            // instruction is illegal and the FEX interpreter dies with SIGILL on
+            // first use. `TUNE_CPU` only tunes FEX's own targets (and stops FEX
+            // re-adding `-mcpu=native`), so we ALSO pin `-mcpu=apple-m1` globally
+            // to cover bundled External libraries, and disable LTO below so
+            // per-TU targeting stays authoritative — link-time codegen could
+            // otherwise re-introduce SVE. FEX's own `NeedDisabledSVE.py` does not
+            // cover this build-host≠run-host case. `stage_fex_runtime` enforces
+            // the result with `assert_no_sve_instructions`.
+            "-DTUNE_CPU=apple-m1",
+            "-DCMAKE_C_FLAGS=-mcpu=apple-m1",
+            "-DCMAKE_CXX_FLAGS=-mcpu=apple-m1",
             // Use FEX's bundled fmt rather than the system shared library so the
             // `-static` link consumes a static archive. FEX resolves xxHash via
             // `find_library` (not `find_package`), so it cannot be bundled this
@@ -98,7 +114,10 @@ fn configure_fex(source: &Path, build: &Path) -> Result<()> {
             // and removes the shared `.so` before this build.
             "-DCMAKE_DISABLE_FIND_PACKAGE_fmt=True",
             "-DENABLE_ASSERTIONS=False",
-            "-DENABLE_LTO=True",
+            // LTO disabled so each TU's `-mcpu=apple-m1` targeting is
+            // authoritative; whole-program codegen could otherwise re-introduce
+            // SVE (see the TUNE_CPU note above).
+            "-DENABLE_LTO=False",
             "-DUSE_LINKER=lld",
             // Statically link FEX so the binfmt-pinned interpreter has no
             // external loader/library dependencies. Required for execution
@@ -153,16 +172,25 @@ fn stage_fex_runtime(install: &Path, output: &Path, version: &str) -> Result<Vec
         if !src.is_file() {
             bail!("FEX install did not produce {}", src.display());
         }
+        let name = src
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| anyhow::anyhow!("invalid FEX binary filename: {}", src.display()))?;
+        // Stage to the output dir first, then validate, so CI can upload the
+        // binary as a debugging artifact even when a guard rejects it (the
+        // failed job still blocks the release).
+        let entry = stage_file(output, version, name, None, &src)?;
         // FEX is statically linked (see `configure_fex`), so there is no
         // loader/library closure to stage and the binfmt-pinned interpreter
         // is self-contained inside OCI container namespaces. Fail loudly if
         // the build silently produced a dynamic binary.
         assert_static_executable(&src)?;
-        let name = src
-            .file_name()
-            .and_then(|name| name.to_str())
-            .ok_or_else(|| anyhow::anyhow!("invalid FEX binary filename: {}", src.display()))?;
-        entries.push(stage_file(output, version, name, None, &src)?);
+        // FEX runs on Apple Silicon, which has no SVE. Fail the build if any SVE
+        // instruction leaked into FEX's own code despite the `TUNE_CPU` pin —
+        // otherwise the interpreter SIGILLs the first time it runs (see
+        // `configure_fex`).
+        assert_no_sve_instructions(&src)?;
+        entries.push(entry);
     }
 
     Ok(entries)
@@ -206,6 +234,124 @@ fn assert_static_executable(path: &Path) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// AArch64 SVE/SVE2 mnemonics whose operands are general-purpose or predicate
+/// registers, so they carry no scalable `z` operand to key off of (e.g.
+/// `cnth x9`). Compilers emit these when vectorising for an SVE-capable target.
+const SVE_MNEMONICS: &[&str] = &[
+    "cntb", "cnth", "cntw", "cntd", "rdvl", "addvl", "addpl", "ptrue", "ptrues", "pfalse", "rdffr",
+    "setffr", "wrffr", "incb", "inch", "incw", "incd", "decb", "dech", "decw", "decd", "whilelo",
+    "whilels", "whilelt", "whilele", "whilege", "whilegt", "whilehi", "whilehs",
+];
+
+/// Fails if FEX's own compiled code contains an AArch64 SVE/SVE2 instruction.
+///
+/// FEX must execute on Apple Silicon (M1–M4), which implements NEON but not
+/// SVE. If FEX's own code is compiled for an SVE-capable CPU (see the
+/// `TUNE_CPU`/`-mcpu` pins in [`configure_fex`]), the interpreter dies with
+/// `SIGILL` the first time such an instruction runs — exactly the v0.5.9
+/// regression, where `FEXCore::Context::CreateNewContext` was full of SVE.
+///
+/// The scan is scoped to FEX-compiled functions by symbol: statically-linked
+/// glibc legitimately carries ifunc-selected SVE `memcpy`/`str*` routines that
+/// are dead code on a non-SVE host (the resolver picks the NEON variant when
+/// `HWCAP_SVE` is unset), so a blanket "no SVE" scan false-positives on every
+/// static binary.
+///
+/// A missing or failing `objdump` is treated as non-fatal (the build does not
+/// hard-fail on absent tooling), mirroring [`assert_static_executable`].
+fn assert_no_sve_instructions(path: &Path) -> Result<()> {
+    let output = match Command::new("objdump")
+        .args(["-d", "--no-show-raw-insn"])
+        .arg(path)
+        .output()
+    {
+        Ok(output) if output.status.success() => output,
+        Ok(_) => {
+            eprintln!(
+                "warning: objdump failed for {}; skipping SVE check",
+                path.display()
+            );
+            return Ok(());
+        }
+        Err(e) => {
+            eprintln!(
+                "warning: could not run objdump to verify {} is SVE-free: {e}",
+                path.display()
+            );
+            return Ok(());
+        }
+    };
+
+    let disasm = String::from_utf8_lossy(&output.stdout);
+    let mut current_fn = "";
+    let mut saw_fex_fn = false;
+    for line in disasm.lines() {
+        if let Some(name) = function_label(line) {
+            current_fn = name;
+            saw_fex_fn |= is_fex_function(name);
+        } else if is_fex_function(current_fn) && disasm_line_uses_sve(line) {
+            bail!(
+                "{} uses SVE in FEX-compiled code, which SIGILLs on Apple Silicon \
+                 (M1–M4, no SVE): `{}` in `{}`. Check the TUNE_CPU/-mcpu pins in \
+                 configure_fex.",
+                path.display(),
+                line.trim(),
+                current_fn
+            );
+        }
+    }
+
+    if !saw_fex_fn {
+        eprintln!(
+            "warning: no FEX function symbols found in {}; could not scope the SVE \
+             check to FEX code (binary stripped?)",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+/// True if `symbol` names a function compiled as part of FEX (or its vendored
+/// `vixl`/`fextl`), as opposed to statically-linked libc. Only SVE in FEX code
+/// is a real bug; glibc's ifunc SVE routines are dead code on a non-SVE host.
+fn is_fex_function(symbol: &str) -> bool {
+    symbol.contains("FEX") || symbol.contains("fextl") || symbol.contains("vixl")
+}
+
+/// Parses an `objdump -d` function-label line (`"<hexaddr> <name>:"`) → `name`.
+fn function_label(line: &str) -> Option<&str> {
+    let (addr, name) = line.strip_suffix(">:")?.split_once(" <")?;
+    (!addr.is_empty() && addr.bytes().all(|b| b.is_ascii_hexdigit())).then_some(name)
+}
+
+/// True if one `objdump -d --no-show-raw-insn` line is an SVE instruction.
+fn disasm_line_uses_sve(line: &str) -> bool {
+    // Lines look like "  <addr>:\t<mnemonic> <operands>"; skip labels/blanks.
+    let Some((_, code)) = line.split_once(":\t") else {
+        return false;
+    };
+    let Some(mnemonic) = code.split_whitespace().next() else {
+        return false;
+    };
+    if SVE_MNEMONICS.contains(&mnemonic) {
+        return true;
+    }
+    // A scalable `z0`..`z31` vector register only appears in SVE instructions.
+    // Drop any trailing `<symbol>` annotation first to avoid matching names.
+    let operands = code.split('<').next().unwrap_or(code);
+    operands
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .any(is_sve_z_register)
+}
+
+/// True if `token` names a scalable vector register `z0`..`z31`.
+fn is_sve_z_register(token: &str) -> bool {
+    token
+        .strip_prefix('z')
+        .and_then(|num| num.parse::<u8>().ok())
+        .is_some_and(|n| n <= 31)
 }
 
 fn stage_file(
@@ -274,4 +420,74 @@ fn sha256_file(path: &Path) -> Result<String> {
 fn path_str(path: &Path) -> Result<&str> {
     path.to_str()
         .ok_or_else(|| anyhow::anyhow!("path is not valid UTF-8: {}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{disasm_line_uses_sve, function_label, is_fex_function};
+
+    #[test]
+    fn function_label_parses_objdump_labels() {
+        assert_eq!(
+            function_label("0000000000542374 <_ZN7FEXCore7Context7Context16CreateNewContextE>:"),
+            Some("_ZN7FEXCore7Context7Context16CreateNewContextE")
+        );
+        assert_eq!(
+            function_label("0000000000400abc <stpncpy>:"),
+            Some("stpncpy")
+        );
+        // Instruction lines and section headers are not function labels.
+        assert_eq!(function_label("  542374:\tcntd\tx0"), None);
+        assert_eq!(function_label("Disassembly of section .text:"), None);
+    }
+
+    #[test]
+    fn fex_functions_distinguished_from_libc() {
+        // FEX's own code (the real SVE-regression site) and vendored vixl/fextl.
+        assert!(is_fex_function(
+            "_ZN7FEXCore7Context7Context16CreateNewContextE"
+        ));
+        assert!(is_fex_function("_ZN4vixl9aarch6411MacroAssembler3brkEi"));
+        assert!(is_fex_function("_ZN5fextl8FEXAllocIcE8allocateEm"));
+        // glibc's ifunc SVE routines carry benign SVE and must be ignored.
+        assert!(!is_fex_function("stpncpy"));
+        assert!(!is_fex_function("__memcpy_aarch64_sve"));
+        assert!(!is_fex_function("___dlmopen"));
+    }
+
+    #[test]
+    fn detects_sve_count_mnemonic() {
+        // The exact instruction the Apple Silicon SIGILL was traced to.
+        assert!(disasm_line_uses_sve("  5e5438:\tcnth\tx9"));
+        assert!(disasm_line_uses_sve("  400570:\trdvl\tx0, #1"));
+    }
+
+    #[test]
+    fn detects_scalable_z_register_operand() {
+        assert!(disasm_line_uses_sve("  400580:\tld1w\t{z0.s}, p0/z, [x0]"));
+        assert!(disasm_line_uses_sve("  4005a0:\tfadd\tz1.s, z1.s, z2.s"));
+    }
+
+    #[test]
+    fn ignores_neon_and_scalar() {
+        assert!(!disasm_line_uses_sve("  400560:\tadd\tv0.4s, v1.4s, v2.4s"));
+        assert!(!disasm_line_uses_sve("  400564:\tmov\tx0, x1"));
+        assert!(!disasm_line_uses_sve("  400568:\tldr\tq0, [sp, #16]"));
+    }
+
+    #[test]
+    fn ignores_symbol_names_containing_z() {
+        // A branch to a symbol whose name looks like a `z` register must not
+        // be mistaken for an SVE operand.
+        assert!(!disasm_line_uses_sve("  40058c:\tbl\t400abc <z16_unused>"));
+        assert!(!disasm_line_uses_sve(
+            "  400590:\tbl\t400def <zlib_inflate>"
+        ));
+    }
+
+    #[test]
+    fn ignores_labels_and_blanks() {
+        assert!(!disasm_line_uses_sve("0000000000400550 <_start>:"));
+        assert!(!disasm_line_uses_sve(""));
+    }
 }

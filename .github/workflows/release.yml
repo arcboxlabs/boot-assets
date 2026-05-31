@@ -235,6 +235,7 @@ jobs:
             --binaries-json "$PWD/dist/fex-binaries.json"
 
       - name: Upload FEX runtime artifacts
+        if: always() # also upload when a validation guard fails, for debugging
         uses: actions/upload-artifact@v7
         with:
           name: fex-runtime
