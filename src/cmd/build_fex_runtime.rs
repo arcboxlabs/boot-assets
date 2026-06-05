@@ -92,7 +92,10 @@ fn apply_patches(source: &Path, patches_dir: &Path) -> Result<()> {
     }
     let mut patches: Vec<PathBuf> = std::fs::read_dir(patches_dir)
         .with_context(|| format!("failed to read patches dir {}", patches_dir.display()))?
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<std::io::Result<Vec<_>>>()
+        .with_context(|| format!("failed to read an entry in {}", patches_dir.display()))?
+        .into_iter()
         .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("patch"))
         .collect();
     patches.sort();
