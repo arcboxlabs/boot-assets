@@ -198,34 +198,11 @@ jobs:
       - name: Install FEX build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            git build-essential cmake ninja-build pkgconf ccache \
-            clang llvm lld patchelf nasm \
-            libssl-dev libfmt-dev libxxhash-dev python3-setuptools python3-clang \
-            squashfs-tools squashfuse erofs-utils \
-            g++-x86-64-linux-gnu \
-            libgcc-13-dev-amd64-cross \
-            libgcc-13-dev-i386-cross \
-            libstdc++-13-dev-arm64-cross \
-            libstdc++-13-dev-amd64-cross \
-            libstdc++-13-dev-i386-cross
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang lld llvm cmake ninja-build nasm
 
       - name: Build CLI
         run: cargo build --release --features build --no-default-features
-
-      # FEX is linked `-static`, but the distro `libxxhash-dev` ships only a
-      # shared `libxxhash.so`, which lld refuses to static-link. FEX resolves
-      # xxHash via `find_library`, so provide a static `libxxhash.a` (built
-      # from the same source as the header) and drop the shared object so the
-      # FEX build links the static archive.
-      - name: Provide static xxHash for FEX static link
-        run: |
-          set -eux
-          git clone --depth 1 --branch v0.8.3 https://github.com/Cyan4973/xxHash /tmp/xxhash
-          make -C /tmp/xxhash libxxhash.a CFLAGS="-O3 -fPIC"
-          sudo install -m 0644 /tmp/xxhash/libxxhash.a /usr/lib/aarch64-linux-gnu/libxxhash.a
-          sudo install -m 0644 /tmp/xxhash/xxhash.h /usr/include/xxhash.h
-          sudo rm -f /usr/lib/aarch64-linux-gnu/libxxhash.so*
 
       - name: Build FEX runtime bundle
         run: |

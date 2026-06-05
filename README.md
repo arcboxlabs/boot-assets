@@ -166,17 +166,19 @@ registers the upstream FEX x86_64 ELF handler with `POCF` flags:
 ```
 
 The registered interpreter is the arm64 FEX binary itself. `FEX_ROOTFS` is not
-set: amd64 OCI containers provide their own amd64 rootfs, loader, and shared
-libraries. The `F` flag pins the opened interpreter at registration time so
+set; FEX's built-in default RootFS is `/`, so amd64 OCI containers provide their
+own amd64 rootfs, loader, and shared libraries. The `F` flag pins the opened
+interpreter at registration time so
 x86_64 container processes can still invoke it even when `/arcbox` is not
 visible inside the container rootfs. If FEX is absent, boot continues normally
 and no x86_64 handler is registered.
 
 FEX is built from source in the release workflow with `boot-assets
-build-fex-runtime`. The command builds FEX **statically** (`-static`) and stages
-`FEX` and `FEXServer` into the binary manifest — no dynamic library closure is
-shipped. Static linking is required: the `F` flag pins only the interpreter
-executable's fd into the container namespace, so a *dynamic* FEX would have the
-kernel resolve its `PT_INTERP` against the container's amd64 rootfs (which lacks
-FEX's arm64 loader) and fail with `ENOENT`. The build asserts the produced
-binaries carry no `PT_INTERP` (`assert_static_executable`).
+build-fex-runtime`. The command builds the arm64 `FEX` interpreter as a
+**static-pie** executable (`-static-pie`) and stages it into the binary
+manifest — no dynamic library closure, and no `FEXServer`. Static linking is
+required: the `F` flag pins only the interpreter executable's fd into the
+container namespace, so a *dynamic* FEX would have the kernel resolve its
+`PT_INTERP` against the container's amd64 rootfs (which lacks FEX's arm64
+loader) and fail with `ENOENT`. The build asserts the produced binary carries no
+`PT_INTERP` (`assert_static_executable`).

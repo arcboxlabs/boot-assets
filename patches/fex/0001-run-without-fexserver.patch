@@ -1,0 +1,49 @@
+diff --git a/FEXCore/Source/Interface/Config/Config.json.in b/FEXCore/Source/Interface/Config/Config.json.in
+index fa56db44c..ed4f79e46 100644
+--- a/FEXCore/Source/Interface/Config/Config.json.in
++++ b/FEXCore/Source/Interface/Config/Config.json.in
+@@ -137,7 +137,7 @@
+     "Emulation": {
+       "RootFS": {
+         "Type": "str",
+-        "Default": "",
++        "Default": "/",
+         "Desc": [
+           "Which Root filesystem prefix to use",
+           "This can be a filesystem path",
+diff --git a/Source/Common/FEXServerClient.cpp b/Source/Common/FEXServerClient.cpp
+index be2736080..ceedd0830 100644
+--- a/Source/Common/FEXServerClient.cpp
++++ b/Source/Common/FEXServerClient.cpp
+@@ -352,12 +352,9 @@ int StartServer(std::string_view InterpreterPath, int watch_fd) {
+   return LocalServerFD;
+ }
+ 
+-int ConnectToAndStartServer(std::string_view InterpreterPath) {
+-  int LocalServerFD = ConnectToServer(ConnectionOption::NoPrintConnectionError);
+-  if (LocalServerFD == -1) {
+-    LocalServerFD = StartServer(InterpreterPath);
+-  }
+-  return LocalServerFD;
++int ConnectToAndStartServer([[maybe_unused]] std::string_view InterpreterPath) {
++  // Never fork a FEXServer; only attach to one that already exists.
++  return ConnectToServer(ConnectionOption::NoPrintConnectionError);
+ }
+ 
+ /**
+diff --git a/Source/Tools/FEXInterpreter/FEXInterpreter.cpp b/Source/Tools/FEXInterpreter/FEXInterpreter.cpp
+index d0b639e8a..a92eb3674 100644
+--- a/Source/Tools/FEXInterpreter/FEXInterpreter.cpp
++++ b/Source/Tools/FEXInterpreter/FEXInterpreter.cpp
+@@ -424,10 +424,7 @@ int main(int argc, char** argv, char** const envp) {
+ 
+   // Ensure FEXServer is setup before config options try to pull CONFIG_ROOTFS
+   auto SelfPath = FEX::GetSelfPath();
+-  if (!FEXServerClient::SetupClient(SelfPath.value_or(argv[0]))) {
+-    LogMan::Msg::EFmt("FEXServerClient: Failure to setup client");
+-    return -1;
+-  }
++  FEXServerClient::SetupClient(SelfPath.value_or(argv[0]));
+ 
+   FEX_CONFIG_OPT(LDPath, ROOTFS);
+   FEX_CONFIG_OPT(Environment, ENV);
