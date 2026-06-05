@@ -26,7 +26,7 @@ index be2736080..ceedd0830 100644
 -  }
 -  return LocalServerFD;
 +int ConnectToAndStartServer([[maybe_unused]] std::string_view InterpreterPath) {
-+  // FEX-static: never fork a FEXServer; only attach to one that already exists.
++  // Never fork a FEXServer; only attach to one that already exists.
 +  return ConnectToServer(ConnectionOption::NoPrintConnectionError);
  }
  

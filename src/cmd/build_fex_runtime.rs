@@ -11,7 +11,10 @@ use arcbox_boot::manifest::{Binary, BinaryTarget};
 const DEFAULT_FEX_REPO: &str = "https://github.com/FEX-Emu/FEX.git";
 const DEFAULT_FEX_REF: &str = "FEX-2605";
 const FEX_ARCH: &str = "arm64";
-const FEX_BINARIES: &[&str] = &["FEX", "FEXServer"];
+const FEX_BINARIES: &[&str] = &["FEX"];
+/// Directory (relative to CWD) of vendored `*.patch` files applied to the FEX
+/// source after clone.
+const DEFAULT_PATCHES_DIR: &str = "patches/fex";
 
 #[derive(Args)]
 pub struct BuildFexRuntimeArgs {
@@ -30,6 +33,9 @@ pub struct BuildFexRuntimeArgs {
     /// Append FEX entries to this JSON manifest fragment.
     #[arg(long)]
     binaries_json: PathBuf,
+    /// Directory of `*.patch` files applied to the FEX source after clone.
+    #[arg(long, default_value = DEFAULT_PATCHES_DIR)]
+    patches_dir: PathBuf,
 }
 
 impl BuildFexRuntimeArgs {
@@ -38,13 +44,13 @@ impl BuildFexRuntimeArgs {
         let work = tempfile::tempdir().context("failed to create FEX build temp dir")?;
         let source = work.path().join("FEX");
         let build = work.path().join("build");
-        let install = work.path().join("install");
 
         clone_fex(&self.repo, &self.source_ref, &source)?;
+        apply_patches(&source, &self.patches_dir)?;
         configure_fex(&source, &build)?;
-        build_and_install_fex(&build, &install)?;
+        build_fex(&build)?;
 
-        let staged = stage_fex_runtime(&install, &self.output, &version)?;
+        let staged = stage_fex_runtime(&build, &self.output, &version)?;
         append_binaries_json(&self.binaries_json, staged)?;
 
         println!("==> FEX runtime built from {}", self.source_ref);
@@ -77,6 +83,42 @@ fn clone_fex(repo: &str, source_ref: &str, source: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Applies every `*.patch` in `patches_dir` to the cloned FEX `source`, in
+/// sorted filename order. These are vendored source changes not upstream (e.g.
+/// dropping the FEXServer dependency).
+fn apply_patches(source: &Path, patches_dir: &Path) -> Result<()> {
+    if !patches_dir.is_dir() {
+        bail!("FEX patches dir not found: {}", patches_dir.display());
+    }
+    let mut patches: Vec<PathBuf> = std::fs::read_dir(patches_dir)
+        .with_context(|| format!("failed to read patches dir {}", patches_dir.display()))?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("patch"))
+        .collect();
+    patches.sort();
+    if patches.is_empty() {
+        bail!("no .patch files in {}", patches_dir.display());
+    }
+
+    for patch in &patches {
+        // `git -C` changes directory, so the patch path must be absolute.
+        let abs = std::fs::canonicalize(patch)
+            .with_context(|| format!("failed to resolve patch {}", patch.display()))?;
+        println!("==> Applying patch {}", patch.display());
+        let status = Command::new("git")
+            .arg("-C")
+            .arg(source)
+            .args(["apply", "--verbose"])
+            .arg(&abs)
+            .status()
+            .with_context(|| format!("failed to run git apply for {}", abs.display()))?;
+        if !status.success() {
+            bail!("git apply failed for {}", patch.display());
+        }
+    }
+    Ok(())
+}
+
 fn configure_fex(source: &Path, build: &Path) -> Result<()> {
     println!("==> Configuring FEX");
     let status = Command::new("cmake")
@@ -87,29 +129,20 @@ fn configure_fex(source: &Path, build: &Path) -> Result<()> {
             path_str(build)?,
             "-G",
             "Ninja",
-            "-DCMAKE_INSTALL_PREFIX=/usr",
             "-DCMAKE_BUILD_TYPE=Release",
-            "-DBUILD_TESTING=False",
+            "-DCMAKE_C_COMPILER=clang",
+            "-DCMAKE_CXX_COMPILER=clang++",
             "-DBUILD_FEXCONFIG=False",
-            // Use FEX's bundled fmt rather than the system shared library so the
-            // `-static` link consumes a static archive. FEX resolves xxHash via
-            // `find_library` (not `find_package`), so it cannot be bundled this
-            // way; the release workflow instead installs a static `libxxhash.a`
-            // and removes the shared `.so` before this build.
-            "-DCMAKE_DISABLE_FIND_PACKAGE_fmt=True",
-            "-DENABLE_ASSERTIONS=False",
-            "-DENABLE_LTO=True",
+            "-DENABLE_CCACHE=False",
+            // No-SVE baseline: stops the compiler auto-vectorising FEX's own code
+            // with SVE, which is ungated and SIGILLs on Apple Silicon.
+            "-DTUNE_CPU=apple-m1",
+            // static-pie: self-contained binfmt interpreter for container
+            // namespaces, no loader/library closure (lld reads ThinLTO bitcode,
+            // GNU ld can't).
             "-DUSE_LINKER=lld",
-            // Statically link FEX so the binfmt-pinned interpreter has no
-            // external loader/library dependencies. Required for execution
-            // inside OCI container mount namespaces, which do not expose
-            // /arcbox: a dynamic FEX would have the kernel resolve its
-            // PT_INTERP against the container rootfs and fail with ENOENT.
-            // `stage_fex_runtime` enforces this with `assert_static_executable`.
-            "-DCMAKE_EXE_LINKER_FLAGS=-static",
+            "-DCMAKE_EXE_LINKER_FLAGS=-static-pie",
         ])
-        .env("CC", "clang")
-        .env("CXX", "clang++")
         .status()
         .context("failed to run cmake for FEX")?;
     if !status.success() {
@@ -118,8 +151,8 @@ fn configure_fex(source: &Path, build: &Path) -> Result<()> {
     Ok(())
 }
 
-fn build_and_install_fex(build: &Path, install: &Path) -> Result<()> {
-    println!("==> Building FEX runtime targets");
+fn build_fex(build: &Path) -> Result<()> {
+    println!("==> Building FEX");
     let status = Command::new("ninja")
         .arg("-C")
         .arg(build)
@@ -129,29 +162,17 @@ fn build_and_install_fex(build: &Path, install: &Path) -> Result<()> {
     if !status.success() {
         bail!("FEX ninja build failed");
     }
-
-    println!("==> Installing FEX into staging root");
-    let status = Command::new("ninja")
-        .arg("-C")
-        .arg(build)
-        .arg("install")
-        .env("DESTDIR", install)
-        .status()
-        .context("failed to run ninja install for FEX")?;
-    if !status.success() {
-        bail!("FEX ninja install failed");
-    }
     Ok(())
 }
 
-fn stage_fex_runtime(install: &Path, output: &Path, version: &str) -> Result<Vec<Binary>> {
-    let install_usr_bin = install.join("usr/bin");
+fn stage_fex_runtime(build: &Path, output: &Path, version: &str) -> Result<Vec<Binary>> {
+    let bin_dir = build.join("Bin");
     let mut entries = Vec::new();
 
     for binary in FEX_BINARIES {
-        let src = install_usr_bin.join(binary);
+        let src = bin_dir.join(binary);
         if !src.is_file() {
-            bail!("FEX install did not produce {}", src.display());
+            bail!("FEX build did not produce {}", src.display());
         }
         // FEX is statically linked (see `configure_fex`), so there is no
         // loader/library closure to stage and the binfmt-pinned interpreter
