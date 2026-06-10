@@ -204,10 +204,16 @@ jobs:
       - name: Build CLI
         run: cargo build --release --features build --no-default-features
 
+      # The CDN key (bin/FEX/{version}/arm64/FEX) must be unique per release:
+      # FEX builds are not bit-reproducible, the B2 sync uses --size-only, and
+      # Cloudflare caches objects for hours — reusing a key for different bytes
+      # leaves the CDN serving a binary that no longer matches the manifest.
       - name: Build FEX runtime bundle
         run: |
+          SOURCE_REF="FEX-2605"
           ./target/release/boot-assets build-fex-runtime \
-            --source-ref FEX-2605 \
+            --source-ref "$SOURCE_REF" \
+            --version "${SOURCE_REF}-${{ needs.resolve-vars.outputs.version }}" \
             --output "$PWD/dist/bin" \
             --binaries-json "$PWD/dist/fex-binaries.json"
 

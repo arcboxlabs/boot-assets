@@ -27,7 +27,13 @@ pub struct BuildFexRuntimeArgs {
     /// Output directory. Files are written to {output}/{name}/{version}/arm64/{name}.
     #[arg(long, default_value = "dist/bin")]
     output: PathBuf,
-    /// Runtime version used in the ArcBox binary manifest path.
+    /// Runtime version used in the ArcBox binary manifest path
+    /// (`bin/FEX/{version}/arm64/FEX`). Defaults to the source ref.
+    ///
+    /// Uploads must pass a version unique to the release (e.g.
+    /// `FEX-2605-0.5.12`): FEX builds are not bit-reproducible, so reusing a
+    /// CDN key for a rebuilt binary desyncs the cached/size-matched object
+    /// from the sha256 pinned in the release manifest.
     #[arg(long)]
     version: Option<String>,
     /// Append FEX entries to this JSON manifest fragment.
