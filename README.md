@@ -11,7 +11,7 @@ Each release publishes per-architecture tarballs plus a unified multi-target man
 The tarball contains:
 
 1. `kernel` — pre-built Linux kernel from [`arcboxlabs/kernel`](https://github.com/arcboxlabs/kernel) (all drivers built-in, `CONFIG_MODULES=n`)
-2. `rootfs.erofs` — minimal read-only rootfs (busybox + mkfs.btrfs + iptables-legacy + ebtables + ethtool + socat + CA certs + optional FEX64 binfmt registration)
+2. `rootfs.erofs` — minimal read-only rootfs (busybox + mkfs.btrfs + iptables-legacy + ebtables + ethtool + socat + CA certs + optional FEX binfmt registration)
 3. `manifest.json` — per-arch manifest (merged into unified manifest at release time)
 
 No agent binary in the boot tarball, and no initramfs.
@@ -139,7 +139,7 @@ Output files are written to `dist/`.
 ├── bin/
 │   └── busybox          # Static busybox (+ symlinks: sh, mount, mkdir, ...)
 ├── sbin/
-│   ├── init             # Trampoline: mount /proc /sys /dev → mount VirtioFS → register FEX64 if available → exec agent
+│   ├── init             # Trampoline: mount /proc /sys /dev → mount VirtioFS → register FEX if available → exec agent
 │   ├── mkfs.btrfs       # Btrfs formatter (first-boot data disk)
 │   ├── iptables         # iptables-legacy (Docker bridge networking)
 │   ├── ebtables         # bridge filter utility used by K3s
@@ -153,7 +153,7 @@ Output files are written to `dist/`.
 └── (mount points)       # tmp/ run/ proc/ sys/ dev/ mnt/ arcbox/ Users/ etc/ var/
 ```
 
-## FEX64 binfmt hook
+## FEX binfmt hook
 
 The rootfs does not embed FEX itself. During boot, `/sbin/init` mounts the
 `arcbox` VirtioFS share and checks for `/arcbox/runtime/bin/FEX` (the

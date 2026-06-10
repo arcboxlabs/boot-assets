@@ -48,7 +48,7 @@ fn init_script() -> String {
 /bin/busybox mkdir -p /arcbox
 /bin/busybox mount -t virtiofs arcbox /arcbox
 
-# Register FEX64 for amd64 Linux ELF binaries when the runtime bundle provides
+# Register FEX for amd64 Linux ELF binaries when the runtime bundle provides
 # {FEX_BINARY}. The POCF flags match upstream FEX's x86_64 binfmt entry: pass the
 # original argv[0], pass the guest binary as an opened fd, preserve file
 # credentials, and pin the interpreter at registration time. FEX_ROOTFS is left
@@ -446,7 +446,7 @@ mod tests {
     }
 
     #[test]
-    fn fex64_binfmt_entry_matches_upstream_shape() {
+    fn fex_binfmt_entry_matches_upstream_shape() {
         assert!(FEX_X86_64_BINFMT_ENTRY.starts_with(":FEX-x86_64:M:0:"));
         assert!(FEX_X86_64_BINFMT_ENTRY.contains(r"\x7fELF\x02"));
         assert!(FEX_X86_64_BINFMT_ENTRY.contains(r"\x3e\x00"));
@@ -455,7 +455,7 @@ mod tests {
     }
 
     #[test]
-    fn init_script_registers_fex64_after_virtiofs_mount() {
+    fn init_script_registers_fex_after_virtiofs_mount() {
         let script = init_script();
         let mount_arcbox = script.find("mount -t virtiofs arcbox /arcbox").unwrap();
         let fex_check = script.find(&format!("[ -x {FEX_BINARY} ]")).unwrap();
