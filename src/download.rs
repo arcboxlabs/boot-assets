@@ -6,6 +6,7 @@ use tokio::io::AsyncWriteExt;
 
 use crate::error::{Error, Result};
 use crate::manifest::{Binary, BinaryTarget, Manifest};
+use crate::verify_cache::VerifyCache;
 
 /// Progress information for binary preparation.
 #[derive(Debug, Clone)]
@@ -55,6 +56,9 @@ impl Manifest {
     ///
     /// For each binary in the manifest:
     /// 1. If the file already exists and its SHA256 matches, skip it.
+    ///    Hashes verified on a previous run are trusted via the
+    ///    [`VerifyCache`] in `dest_dir` while the file's stat signature
+    ///    is unchanged, so steady-state runs cost one stat per binary.
     /// 2. Otherwise, download from `{cdn_base_url}/{path}` and verify
     ///    the checksum.
     ///
@@ -69,6 +73,7 @@ impl Manifest {
     ) -> Result<()> {
         tokio::fs::create_dir_all(dest_dir).await?;
 
+        let mut cache = VerifyCache::load(dest_dir).await;
         let total = self.binaries.len();
         for (idx, binary) in self.binaries.iter().enumerate() {
             let bt = binary.target_for_arch(arch)?;
@@ -96,11 +101,18 @@ impl Manifest {
 
             pg(PreparePhase::Checking);
 
-            // Check cache: if file exists and checksum matches, skip download.
+            // Check cache: if the file was verified before and is
+            // untouched, or exists and re-hashes to the expected digest,
+            // skip the download.
+            if cache.is_verified(&dest_path, &bt.sha256).await {
+                pg(PreparePhase::Cached);
+                continue;
+            }
             if dest_path.exists()
                 && let Ok(actual) = sha256_file(&dest_path).await
                 && actual == bt.sha256
             {
+                cache.record(&dest_path, &bt.sha256).await;
                 pg(PreparePhase::Cached);
                 continue;
             }
@@ -125,9 +137,11 @@ impl Manifest {
                 tokio::fs::set_permissions(&dest_path, perms).await?;
             }
 
+            cache.record(&dest_path, &bt.sha256).await;
             pg(PreparePhase::Ready);
         }
 
+        cache.save().await;
         Ok(())
     }
 
@@ -188,8 +202,20 @@ pub(crate) fn current_arch() -> &'static str {
 }
 
 pub(crate) async fn sha256_file(path: &Path) -> Result<String> {
-    let bytes = tokio::fs::read(path).await?;
-    Ok(format!("{:x}", Sha256::digest(&bytes)))
+    use tokio::io::AsyncReadExt;
+    let mut file = tokio::fs::File::open(path).await?;
+    let mut hasher = Sha256::new();
+    // Stream in 1 MiB chunks — assets run to hundreds of MB, and
+    // slurping them just to hash wastes peak memory.
+    let mut buf = vec![0u8; 1024 * 1024];
+    loop {
+        let n = file.read(&mut buf).await?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 pub(crate) async fn download_and_verify(

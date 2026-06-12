@@ -7,3 +7,6 @@ pub mod download;
 
 #[cfg(feature = "download")]
 pub mod asset_manager;
+
+#[cfg(feature = "download")]
+pub(crate) mod verify_cache;

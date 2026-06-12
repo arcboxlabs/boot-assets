@@ -1,6 +1,6 @@
 [package]
 name = "arcbox-boot"
-version = "0.5.1"
+version = "0.5.2"
 edition = "2024"
 description = "Boot asset manifest types, asset manager, and CLI tools for ArcBox VM runtime"
 license = "MIT OR Apache-2.0"
@@ -61,3 +61,7 @@ toml = { version = "1.0.3", features = ["parse"] }
 name = "boot-assets"
 path = "src/main.rs"
 required-features = ["build"]
+
+[dev-dependencies]
+filetime = "0.2.29"
+tempfile = "3.27.0"
