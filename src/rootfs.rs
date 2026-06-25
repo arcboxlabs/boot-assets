@@ -39,7 +39,37 @@ const FEX_BINARY: &str = "/arcbox/runtime/bin/FEX";
 
 const FEX_X86_64_BINFMT_ENTRY: &str = r#":FEX-x86_64:M:0:\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x3e\x00:\xff\xff\xff\xff\xff\xfe\xfe\x00\x00\x00\x00\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/arcbox/runtime/bin/FEX:POCF"#;
 
-fn init_script() -> String {
+/// Path to the staged guest agent on the VirtioFS `arcbox` share.
+const AGENT_BIN: &str = "/arcbox/bin/arcbox-agent";
+
+/// busybox `inittab` driving PID 1.
+///
+/// The kernel runs `/sbin/init` (a symlink to the busybox multi-call binary), so
+/// busybox `init` is PID 1. It parses this table once at boot, then:
+///   1. runs the `sysinit` entry (rcS: early mounts + one-shot `arcbox-agent
+///      init`) to completion, then
+///   2. `respawn`s the long-running agent — restarting it if it ever exits, so a
+///      crashing agent no longer panics the kernel as a dead PID 1.
+///
+/// Ctrl-Alt-Del maps to an orderly poweroff.
+fn inittab() -> String {
+    format!(
+        "::sysinit:/etc/init.d/rcS\n\
+         ::respawn:{AGENT_BIN}\n\
+         ::ctrlaltdel:/bin/busybox poweroff\n"
+    )
+}
+
+/// `sysinit` script run once by busybox init before the agent is respawned.
+///
+/// Mounts the early pseudo-filesystems and the VirtioFS `arcbox` share, registers
+/// FEX for amd64 ELF binaries, then runs the agent's one-shot system
+/// initialization (`arcbox-agent init`: writable mounts, networking, `/etc`),
+/// which returns on completion. The `timeout` guard prevents a mismatched agent
+/// (one lacking the `init` subcommand, which would block) from stalling PID 1's
+/// sysinit phase forever — boot then degrades to a host-driven restart instead of
+/// hanging.
+fn rcs_script() -> String {
     format!(
         r#"#!/bin/busybox sh
 /bin/busybox mount -t proc proc /proc
@@ -67,7 +97,9 @@ if [ -x {FEX_BINARY} ]; then
   fi
 fi
 
-exec /arcbox/bin/arcbox-agent
+# One-shot guest system init (mounts, networking, /etc). Returns on completion;
+# busybox init then respawns the long-running agent via the inittab entry.
+/bin/busybox timeout 60 {AGENT_BIN} init || true
 "#
     )
 }
@@ -287,7 +319,7 @@ ls -lh /out/busybox /out/mkfs.btrfs /out/iptables {utility_out_paths} {nfs_out_p
     println!("    Compression: {}", opts.compression);
     println!("    Block size: {} bytes", EROFS_BLOCK_SIZE);
     println!(
-        "    Contents: busybox + mkfs.btrfs + iptables-legacy + ebtables + ethtool + socat + nfs-utils + CA certs + trampoline"
+        "    Contents: busybox + mkfs.btrfs + iptables-legacy + ebtables + ethtool + socat + nfs-utils + CA certs + busybox-init boot sequence"
     );
     println!("    Core boot tools are static; packaged utilities include required shared libs");
 
@@ -309,8 +341,16 @@ fn build_erofs_image_with_docker(
         .ok_or_else(|| anyhow::anyhow!("output path has no parent: {}", output.display()))?;
     std::fs::create_dir_all(output_dir)?;
 
-    // Install erofs-utils inside the container first.
-    let install_and_run = "apk add --no-cache erofs-utils >/dev/null && exec mkfs.erofs \"$@\"";
+    // Copy the host-assembled tree into a container-local overlay so we can create
+    // the /dev/console and /dev/null device nodes busybox init expects at PID 1
+    // startup. The bind-mounted /rootfs is macOS-backed and read-only and cannot
+    // hold Linux device nodes, so they are created here in the Linux overlay and
+    // then packed by mkfs.erofs (which sources /build, not /rootfs).
+    let install_and_run = "apk add --no-cache erofs-utils >/dev/null && \
+        cp -a /rootfs /build && \
+        mknod -m 600 /build/dev/console c 5 1 && \
+        mknod -m 666 /build/dev/null c 1 3 && \
+        exec mkfs.erofs \"$@\"";
 
     let status = Command::new("docker")
         .args([
@@ -333,7 +373,7 @@ fn build_erofs_image_with_docker(
         .arg(format!("-x{EROFS_XATTR_TOLERANCE}"))
         .arg(format!("-z{compression}"))
         .arg(format!("/out/{output_name}"))
-        .arg("/rootfs")
+        .arg("/build")
         .status()
         .context("failed to run docker for mkfs.erofs")?;
     if !status.success() {
@@ -367,9 +407,10 @@ fn build_rootfs_tree(rootfs: &Path, staging: &Path) -> Result<()> {
         std::os::unix::fs::symlink("iptables", sbin_dir.join(link))?;
     }
 
-    // /sbin/init — trampoline
-    std::fs::write(sbin_dir.join("init"), init_script())?;
-    set_executable(&sbin_dir.join("init"))?;
+    // /sbin/init — busybox init (PID 1 supervisor). busybox dispatches on
+    // basename(argv[0]) == "init", so a symlink to the multi-call binary is all
+    // that's needed; the boot sequence is driven by /etc/inittab (written below).
+    std::os::unix::fs::symlink("/bin/busybox", sbin_dir.join("init"))?;
 
     // /lib — dynamic loader and shared libs for packaged utilities.
     let lib_dir = rootfs.join("lib");
@@ -397,6 +438,16 @@ fn build_rootfs_tree(rootfs: &Path, staging: &Path) -> Result<()> {
     for dir in MOUNT_DIRS {
         std::fs::create_dir_all(rootfs.join(dir))?;
     }
+
+    // /etc/inittab + /etc/init.d/rcS — the busybox init boot sequence. inittab is
+    // parsed by PID 1 at boot (before rcS later mounts a tmpfs over /etc), so the
+    // shadowing is harmless.
+    let etc_dir = rootfs.join("etc");
+    std::fs::write(etc_dir.join("inittab"), inittab())?;
+    let init_d_dir = etc_dir.join("init.d");
+    std::fs::create_dir_all(&init_d_dir)?;
+    std::fs::write(init_d_dir.join("rcS"), rcs_script())?;
+    set_executable(&init_d_dir.join("rcS"))?;
 
     Ok(())
 }
@@ -433,7 +484,7 @@ fn humanize_size(bytes: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{FEX_BINARY, FEX_X86_64_BINFMT_ENTRY, init_script, mkfs_erofs_block_flag};
+    use super::{FEX_BINARY, FEX_X86_64_BINFMT_ENTRY, inittab, mkfs_erofs_block_flag, rcs_script};
 
     #[test]
     fn mkfs_erofs_block_flag_uses_4k_syntax() {
@@ -455,17 +506,34 @@ mod tests {
     }
 
     #[test]
-    fn init_script_registers_fex_after_virtiofs_mount() {
-        let script = init_script();
+    fn rcs_script_runs_agent_init_after_virtiofs_and_fex() {
+        let script = rcs_script();
         let mount_arcbox = script.find("mount -t virtiofs arcbox /arcbox").unwrap();
         let fex_check = script.find(&format!("[ -x {FEX_BINARY} ]")).unwrap();
-        let agent_exec = script.find("exec /arcbox/bin/arcbox-agent").unwrap();
+        let agent_init = script.find("/arcbox/bin/arcbox-agent init").unwrap();
 
+        // FEX registers after the share is mounted; the one-shot `arcbox-agent
+        // init` runs last so busybox init can then respawn the long-running agent.
         assert!(mount_arcbox < fex_check);
-        assert!(fex_check < agent_exec);
+        assert!(fex_check < agent_init);
         assert!(script.contains("mount -t binfmt_misc binfmt_misc"));
         assert!(script.contains(FEX_X86_64_BINFMT_ENTRY));
+        // sysinit is one-shot: it must not exec/replace itself with the agent.
+        assert!(!script.contains("exec /arcbox/bin/arcbox-agent"));
+        // The timeout guard keeps a mismatched (blocking) agent from stalling boot.
+        assert!(script.contains("timeout 60 /arcbox/bin/arcbox-agent init"));
         assert!(!script.contains("export FEX_ROOTFS"));
         assert!(!script.contains('\0'));
+    }
+
+    #[test]
+    fn inittab_supervises_agent_as_pid1() {
+        let tab = inittab();
+        assert!(tab.contains("::sysinit:/etc/init.d/rcS"));
+        // respawn => busybox init restarts the agent if it ever exits, so a crash
+        // no longer kills PID 1.
+        assert!(tab.contains("::respawn:/arcbox/bin/arcbox-agent"));
+        assert!(tab.contains("::ctrlaltdel:/bin/busybox poweroff"));
+        assert!(!tab.contains('\0'));
     }
 }
