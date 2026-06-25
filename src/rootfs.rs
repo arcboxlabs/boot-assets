@@ -65,10 +65,9 @@ fn inittab() -> String {
 /// Mounts the early pseudo-filesystems and the VirtioFS `arcbox` share, registers
 /// FEX for amd64 ELF binaries, then runs the agent's one-shot system
 /// initialization (`arcbox-agent init`: writable mounts, networking, `/etc`),
-/// which returns on completion. The `timeout` guard prevents a mismatched agent
-/// (one lacking the `init` subcommand, which would block) from stalling PID 1's
-/// sysinit phase forever — boot then degrades to a host-driven restart instead of
-/// hanging.
+/// which returns on completion. The rootfs and agent ship in lockstep, so the
+/// `init` subcommand is always supported; `|| true` tolerates a non-fatal init
+/// error so the supervised agent still starts and can report status.
 fn rcs_script() -> String {
     format!(
         r#"#!/bin/busybox sh
@@ -99,7 +98,8 @@ fi
 
 # One-shot guest system init (mounts, networking, /etc). Returns on completion;
 # busybox init then respawns the long-running agent via the inittab entry.
-/bin/busybox timeout 60 {AGENT_BIN} init || true
+# `|| true` keeps a non-fatal init error from aborting sysinit.
+{AGENT_BIN} init || true
 "#
     )
 }
@@ -439,9 +439,9 @@ fn build_rootfs_tree(rootfs: &Path, staging: &Path) -> Result<()> {
         std::fs::create_dir_all(rootfs.join(dir))?;
     }
 
-    // /etc/inittab + /etc/init.d/rcS — the busybox init boot sequence. inittab is
-    // parsed by PID 1 at boot (before rcS later mounts a tmpfs over /etc), so the
-    // shadowing is harmless.
+    // /etc/inittab + /etc/init.d/rcS — the busybox init boot sequence. busybox
+    // parses inittab once at boot, before `arcbox-agent init` (invoked by rcS)
+    // later mounts a writable tmpfs over /etc, so that shadowing is harmless.
     let etc_dir = rootfs.join("etc");
     std::fs::write(etc_dir.join("inittab"), inittab())?;
     let init_d_dir = etc_dir.join("init.d");
@@ -520,8 +520,9 @@ mod tests {
         assert!(script.contains(FEX_X86_64_BINFMT_ENTRY));
         // sysinit is one-shot: it must not exec/replace itself with the agent.
         assert!(!script.contains("exec /arcbox/bin/arcbox-agent"));
-        // The timeout guard keeps a mismatched (blocking) agent from stalling boot.
-        assert!(script.contains("timeout 60 /arcbox/bin/arcbox-agent init"));
+        // No busybox `timeout` wrapper: its arg syntax is version-dependent and a
+        // misparse would be silently swallowed by `|| true`, skipping init.
+        assert!(!script.contains("timeout"));
         assert!(!script.contains("export FEX_ROOTFS"));
         assert!(!script.contains('\0'));
     }
