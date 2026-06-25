@@ -407,11 +407,6 @@ fn build_rootfs_tree(rootfs: &Path, staging: &Path) -> Result<()> {
         std::os::unix::fs::symlink("iptables", sbin_dir.join(link))?;
     }
 
-    // /sbin/init — busybox init (PID 1 supervisor). busybox dispatches on
-    // basename(argv[0]) == "init", so a symlink to the multi-call binary is all
-    // that's needed; the boot sequence is driven by /etc/inittab (written below).
-    std::os::unix::fs::symlink("/bin/busybox", sbin_dir.join("init"))?;
-
     // /lib — dynamic loader and shared libs for packaged utilities.
     let lib_dir = rootfs.join("lib");
     std::fs::create_dir_all(&lib_dir)?;
@@ -439,16 +434,32 @@ fn build_rootfs_tree(rootfs: &Path, staging: &Path) -> Result<()> {
         std::fs::create_dir_all(rootfs.join(dir))?;
     }
 
-    // /etc/inittab + /etc/init.d/rcS — the busybox init boot sequence. busybox
-    // parses inittab once at boot, before `arcbox-agent init` (invoked by rcS)
-    // later mounts a writable tmpfs over /etc, so that shadowing is harmless.
+    // /sbin/init symlink + /etc/inittab + /etc/init.d/rcS — the busybox init
+    // boot sequence.
+    write_boot_sequence(rootfs)?;
+
+    Ok(())
+}
+
+/// Writes the busybox-init boot sequence into the rootfs tree: `/sbin/init` (a
+/// symlink to the busybox multi-call binary, which dispatches on
+/// `basename(argv[0]) == "init"`), `/etc/inittab`, and the one-shot
+/// `/etc/init.d/rcS` sysinit script. busybox parses inittab once at boot, before
+/// `arcbox-agent init` (invoked by rcS) later mounts a writable tmpfs over /etc,
+/// so that shadowing is harmless. The `/dev/console` and `/dev/null` device nodes
+/// busybox init also needs are created later in the Linux overlay during
+/// mkfs.erofs (the macOS-backed staging tree can't hold device nodes).
+fn write_boot_sequence(rootfs: &Path) -> Result<()> {
+    let sbin_dir = rootfs.join("sbin");
+    std::fs::create_dir_all(&sbin_dir)?;
+    std::os::unix::fs::symlink("/bin/busybox", sbin_dir.join("init"))?;
+
     let etc_dir = rootfs.join("etc");
-    std::fs::write(etc_dir.join("inittab"), inittab())?;
     let init_d_dir = etc_dir.join("init.d");
     std::fs::create_dir_all(&init_d_dir)?;
+    std::fs::write(etc_dir.join("inittab"), inittab())?;
     std::fs::write(init_d_dir.join("rcS"), rcs_script())?;
     set_executable(&init_d_dir.join("rcS"))?;
-
     Ok(())
 }
 
@@ -484,7 +495,10 @@ fn humanize_size(bytes: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{FEX_BINARY, FEX_X86_64_BINFMT_ENTRY, inittab, mkfs_erofs_block_flag, rcs_script};
+    use super::{
+        FEX_BINARY, FEX_X86_64_BINFMT_ENTRY, inittab, mkfs_erofs_block_flag, rcs_script,
+        write_boot_sequence,
+    };
 
     #[test]
     fn mkfs_erofs_block_flag_uses_4k_syntax() {
@@ -536,5 +550,41 @@ mod tests {
         assert!(tab.contains("::respawn:/arcbox/bin/arcbox-agent"));
         assert!(tab.contains("::ctrlaltdel:/bin/busybox poweroff"));
         assert!(!tab.contains('\0'));
+    }
+
+    /// Assembles the boot sequence into a real temp tree and asserts the on-disk
+    /// layout busybox init depends on (the device nodes are added later in the
+    /// Docker overlay, so they are out of scope here).
+    #[test]
+    fn write_boot_sequence_assembles_busybox_init_tree() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!("arcbox-boot-seq-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        write_boot_sequence(&root).unwrap();
+
+        // /sbin/init is a symlink to the busybox multi-call binary (init applet).
+        let init = root.join("sbin/init");
+        assert_eq!(
+            std::fs::read_link(&init).unwrap(),
+            std::path::Path::new("/bin/busybox")
+        );
+
+        // /etc/inittab carries the supervision entries.
+        let tab = std::fs::read_to_string(root.join("etc/inittab")).unwrap();
+        assert!(tab.contains("::sysinit:/etc/init.d/rcS"));
+        assert!(tab.contains("::respawn:/arcbox/bin/arcbox-agent"));
+
+        // /etc/init.d/rcS is executable and runs the one-shot init after mounting.
+        let rcs = root.join("etc/init.d/rcS");
+        let body = std::fs::read_to_string(&rcs).unwrap();
+        assert!(body.contains("mount -t virtiofs arcbox /arcbox"));
+        assert!(body.contains("/arcbox/bin/arcbox-agent init"));
+        let mode = std::fs::metadata(&rcs).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o755, "rcS must be executable");
+
+        std::fs::remove_dir_all(&root).ok();
     }
 }
