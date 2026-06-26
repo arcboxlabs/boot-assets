@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use fs_err as fs;
 use serde::Deserialize;
 
 /// Root structure of `upstream.toml`.
@@ -48,7 +49,7 @@ pub enum UpstreamSourceFormat {
 
 impl UpstreamConfig {
     pub fn from_file(path: &std::path::Path) -> Result<Self, String> {
-        let content = std::fs::read_to_string(path)
+        let content = fs::read_to_string(path)
             .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
         let config: Self = toml::from_str(&content)
             .map_err(|e| format!("failed to parse {}: {e}", path.display()))?;

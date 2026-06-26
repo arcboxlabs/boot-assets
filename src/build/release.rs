@@ -1,13 +1,13 @@
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use fs_err as fs;
 use humansize::{BINARY, format_size};
-use sha2::{Digest, Sha256};
 
-use crate::build::rootfs::{build_rootfs, BuildRootfsOpts};
+use crate::build::rootfs::{BuildRootfsOpts, build_rootfs};
 use arcbox_boot::manifest::{Binary, FileEntry, Manifest, Target, schema_version_for};
+use arcbox_boot::util::{asset_object_path, create_tar_gz, read_json_file, sha256_file};
 
 #[derive(Debug, Clone)]
 pub struct BuildReleaseOpts {
@@ -73,12 +73,12 @@ pub fn build_release(opts: &BuildReleaseOpts) -> Result<()> {
 
     let target = Target {
         kernel: FileEntry {
-            path: format!("asset/v{}/{}/kernel", opts.version, opts.arch),
+            path: asset_object_path(&opts.version, &opts.arch, "kernel"),
             sha256: kernel_sha256,
             version: opts.kernel_version.clone(),
         },
         rootfs: FileEntry {
-            path: format!("asset/v{}/{}/rootfs.erofs", opts.version, opts.arch),
+            path: asset_object_path(&opts.version, &opts.arch, "rootfs.erofs"),
             sha256: rootfs_sha256,
             version: None,
         },
@@ -111,7 +111,7 @@ pub fn build_release(opts: &BuildReleaseOpts) -> Result<()> {
     let tarball_path = opts.output_dir.join(&tarball_name);
 
     println!("==> Packaging tarball");
-    create_tarball(
+    create_tar_gz(
         &tarball_path,
         work,
         &["kernel", "rootfs.erofs", "manifest.json"],
@@ -186,29 +186,10 @@ pub fn merge_manifests(base: &mut Manifest, other: &Manifest) -> Result<()> {
     Ok(())
 }
 
-fn sha256_file(path: &Path) -> Result<String> {
-    let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
-    Ok(format!("{:x}", Sha256::digest(&bytes)))
-}
-
-fn create_tarball(output: &Path, work_dir: &Path, files: &[&str]) -> Result<()> {
-    let file = fs::File::create(output)?;
-    let gz = flate2::write::GzEncoder::new(file, flate2::Compression::default());
-    let mut ar = tar::Builder::new(gz);
-    for name in files {
-        let file_path = work_dir.join(name);
-        ar.append_path_with_name(&file_path, name)
-            .with_context(|| format!("failed to add {name} to tarball"))?;
-    }
-    ar.finish()?;
-    Ok(())
-}
-
 fn load_binaries_json(path: &Option<PathBuf>) -> Result<Vec<Binary>> {
     let Some(path) = path else {
         return Ok(Vec::new());
     };
-    let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
-    serde_json::from_slice(&bytes)
+    read_json_file(path)
         .with_context(|| format!("failed to parse binaries JSON from {}", path.display()))
 }

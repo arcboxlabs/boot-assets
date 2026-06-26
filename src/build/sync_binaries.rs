@@ -1,42 +1,14 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
-use camino::Utf8PathBuf;
 use fs_err as fs;
-use sha2::{Digest, Sha256};
-use url::Url;
 
 use arcbox_boot::upstream::UpstreamConfig;
 use arcbox_boot::upstream::UpstreamSource;
 use arcbox_boot::upstream::UpstreamSourceFormat;
-
-/// Sanitize a version string for use in file paths and URLs.
-/// Replaces `+` (semver build metadata separator) with `-` to avoid
-/// URL encoding issues on CDNs where `+` is interpreted as a space.
-fn path_safe_version(version: &str) -> String {
-    version.replace('+', "-")
-}
-
-fn cdn_url(base: &str, path: &str) -> Result<String> {
-    let mut base = base.to_string();
-    if !base.ends_with('/') {
-        base.push('/');
-    }
-    Url::parse(&base)
-        .with_context(|| format!("invalid CDN base URL: {base}"))?
-        .join(path)
-        .with_context(|| format!("invalid CDN path: {path}"))
-        .map(|url| url.to_string())
-}
-
-fn binary_object_path(name: &str, version: &str, arch: &str) -> String {
-    Utf8PathBuf::from("bin")
-        .join(name)
-        .join(version)
-        .join(arch)
-        .join(name)
-        .into_string()
-}
+use arcbox_boot::util::{
+    binary_object_path, cdn_url, path_safe_version, set_executable, sha256_file, write_json_pretty,
+};
 
 #[derive(Debug, Clone)]
 pub struct SyncBinariesOpts {
@@ -114,16 +86,15 @@ pub fn sync_binaries(opts: &SyncBinariesOpts) -> Result<()> {
 
         // Build and output manifest fragment.
         let fragment = build_manifest_fragment(&config, &opts.output, &arches)?;
-        let json = serde_json::to_string_pretty(&fragment)?;
-
         if let Some(ref out_path) = opts.binaries_json {
             if let Some(parent) = out_path.parent() {
                 fs::create_dir_all(parent)?;
             }
-            fs::write(out_path, &json)?;
+            write_json_pretty(out_path, &fragment)?;
             println!("==> Wrote binaries manifest to {}", out_path.display());
         }
 
+        let json = serde_json::to_string_pretty(&fragment)?;
         println!();
         println!("=== manifest.json binaries fragment ===");
         println!("{json}");
@@ -178,13 +149,7 @@ async fn download_and_extract(url: &str, extract_path: &str, dest: &std::path::P
             std::io::Read::read_to_end(&mut entry, &mut content)?;
             fs::write(dest, &content)?;
 
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let mut perms = fs::metadata(dest)?.permissions();
-                perms.set_mode(0o755);
-                fs::set_permissions(dest, perms)?;
-            }
+            set_executable(dest)?;
 
             found = true;
             break;
@@ -210,20 +175,9 @@ async fn download_binary(url: &str, dest: &std::path::Path) -> Result<()> {
     let bytes = resp.bytes().await?;
     fs::write(dest, &bytes)?;
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(dest)?.permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(dest, perms)?;
-    }
+    set_executable(dest)?;
 
     Ok(())
-}
-
-fn sha256_file(path: &std::path::Path) -> Result<String> {
-    let bytes = fs::read(path)?;
-    Ok(format!("{:x}", Sha256::digest(&bytes)))
 }
 
 fn build_manifest_fragment(

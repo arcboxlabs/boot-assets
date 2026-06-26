@@ -1,12 +1,11 @@
 use std::path::Path;
 
 use futures_util::StreamExt;
-use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
-use url::Url;
 
 use crate::error::{Error, Result};
 use crate::manifest::{Binary, BinaryTarget, Manifest};
+use crate::util::{cdn_url, current_arch, set_executable_async, sha256_file_async};
 
 /// Progress information for binary preparation.
 #[derive(Debug, Clone)]
@@ -41,18 +40,6 @@ pub type ProgressCallback = Box<dyn Fn(PrepareProgress) + Send + Sync>;
 const HTTP_TIMEOUT_SECS: u64 = 300;
 const USER_AGENT: &str = "arcbox-boot-assets/0.1";
 
-pub(crate) fn cdn_url(base: &str, path: &str) -> Result<String> {
-    let mut base = base.to_string();
-    if !base.ends_with('/') {
-        base.push('/');
-    }
-    Url::parse(&base)
-        .map_err(|e| Error::InvalidConfig(format!("invalid CDN base URL '{base}': {e}")))?
-        .join(path)
-        .map(|url| url.to_string())
-        .map_err(|e| Error::InvalidConfig(format!("invalid CDN path '{path}': {e}")))
-}
-
 impl Manifest {
     /// Returns the target entry for the current host architecture, if present.
     pub fn target_for_current_arch(&self) -> Option<(&str, &crate::manifest::Target)> {
@@ -84,7 +71,9 @@ impl Manifest {
 
         let total = self.binaries.len();
         for (idx, binary) in self.binaries.iter().enumerate() {
-            let bt = binary.target_for_arch(arch)?;
+            let Some(bt) = binary.targets.get(arch) else {
+                continue;
+            };
             let dest_path = if let Some(ref sub) = binary.install_dir {
                 // Resolve install_dir as a sibling of dest_dir.
                 // e.g. dest_dir=/arcbox/bin/, install_dir="kernel" → /arcbox/kernel/vmlinux
@@ -111,7 +100,7 @@ impl Manifest {
 
             // Check cache: if file exists and checksum matches, skip download.
             if dest_path.exists()
-                && let Ok(actual) = sha256_file(&dest_path).await
+                && let Ok(actual) = sha256_file_async(&dest_path).await
                 && actual == bt.sha256
             {
                 pg(PreparePhase::Cached);
@@ -129,14 +118,7 @@ impl Manifest {
             })
             .await?;
 
-            // Mark executable on Unix.
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let mut perms = tokio::fs::metadata(&dest_path).await?.permissions();
-                perms.set_mode(0o755);
-                tokio::fs::set_permissions(&dest_path, perms).await?;
-            }
+            set_executable_async(&dest_path).await?;
 
             pg(PreparePhase::Ready);
         }
@@ -148,7 +130,9 @@ impl Manifest {
     /// checksums. Uses the same path resolution as [`prepare_binaries`].
     pub async fn validate_binaries(&self, arch: &str, dest_dir: &Path) -> Result<()> {
         for binary in &self.binaries {
-            let bt = binary.target_for_arch(arch)?;
+            let Some(bt) = binary.targets.get(arch) else {
+                continue;
+            };
             let path = if let Some(ref sub) = binary.install_dir {
                 let base = dest_dir.parent().unwrap_or(dest_dir);
                 base.join(sub).join(&binary.name)
@@ -164,7 +148,7 @@ impl Manifest {
                 )));
             }
 
-            let actual = sha256_file(&path).await?;
+            let actual = sha256_file_async(&path).await?;
             if actual != bt.sha256 {
                 return Err(Error::ChecksumMismatch {
                     name: binary.name.clone(),
@@ -187,22 +171,6 @@ impl Binary {
                 arch: arch.to_string(),
             })
     }
-}
-
-/// Returns the architecture string for the current host.
-pub(crate) fn current_arch() -> &'static str {
-    if cfg!(target_arch = "aarch64") {
-        "arm64"
-    } else if cfg!(target_arch = "x86_64") {
-        "x86_64"
-    } else {
-        "unknown"
-    }
-}
-
-pub(crate) async fn sha256_file(path: &Path) -> Result<String> {
-    let bytes = tokio::fs::read(path).await?;
-    Ok(format!("{:x}", Sha256::digest(&bytes)))
 }
 
 pub(crate) async fn download_and_verify(
@@ -238,6 +206,7 @@ pub(crate) async fn download_and_verify(
     let temp_path = dest.with_extension("tmp");
     let mut file = tokio::fs::File::create(&temp_path).await?;
     let mut stream = response.bytes_stream();
+    use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
 
     while let Some(chunk) = stream.next().await {
@@ -263,4 +232,42 @@ pub(crate) async fn download_and_verify(
 
     tokio::fs::rename(&temp_path, dest).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use crate::manifest::{Binary, BinaryTarget, Manifest};
+
+    #[tokio::test]
+    async fn validate_binaries_skips_binaries_without_target_arch() {
+        let manifest = Manifest {
+            schema_version: 1,
+            asset_version: "1.0.0".to_string(),
+            built_at: "2026-01-01T00:00:00Z".to_string(),
+            source_repo: None,
+            source_ref: None,
+            source_sha: None,
+            targets: BTreeMap::new(),
+            binaries: vec![Binary {
+                name: "FEX".to_string(),
+                version: "FEX-2605".to_string(),
+                targets: BTreeMap::from([(
+                    "arm64".to_string(),
+                    BinaryTarget {
+                        path: "bin/FEX/FEX-2605/arm64/FEX".to_string(),
+                        sha256: "unused".to_string(),
+                    },
+                )]),
+                install_dir: Some("runtime/bin".to_string()),
+            }],
+        };
+
+        let temp = tempfile::tempdir().unwrap();
+        manifest
+            .validate_binaries("x86_64", temp.path())
+            .await
+            .unwrap();
+    }
 }

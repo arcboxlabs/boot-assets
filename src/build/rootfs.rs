@@ -3,7 +3,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use fs_err as fs;
 use humansize::{BINARY, format_size};
-use xshell::{cmd, Shell};
+use minijinja::context;
+use xshell::{Shell, cmd};
+
+use arcbox_boot::util::{copy_executable, render_template, set_executable};
 
 const BUSYBOX_SYMLINKS: &[&str] = &[
     "sh", "mount", "umount", "mkdir", "cat", "echo", "sleep", "ln", "chmod", "chown", "cp", "mv",
@@ -70,12 +73,15 @@ fn inittab() -> String {
 /// which returns on completion. The rootfs and agent ship in lockstep, so the
 /// `init` subcommand is always supported; `|| true` tolerates a non-fatal init
 /// error so the supervised agent still starts and can report status.
-fn rcs_script() -> String {
-    format!(
+fn rcs_script() -> Result<String> {
+    render_template(
+        "rcS.sh",
         include_str!("scripts/rcS.sh"),
-        FEX_BINARY = FEX_BINARY,
-        FEX_X86_64_BINFMT_ENTRY = FEX_X86_64_BINFMT_ENTRY,
-        AGENT_BIN = AGENT_BIN,
+        context! {
+            FEX_BINARY => FEX_BINARY,
+            FEX_X86_64_BINFMT_ENTRY => FEX_X86_64_BINFMT_ENTRY,
+            AGENT_BIN => AGENT_BIN,
+        },
     )
 }
 
@@ -88,18 +94,21 @@ fn total_build_steps() -> usize {
     CORE_STATIC_BINARIES.len() + K3S_HOST_UTILITIES.len() + NFS_BINARIES.len()
 }
 
-fn k3s_host_utilities_stage_script() -> String {
+fn k3s_host_utilities_stage_script() -> Result<String> {
     let start_index = CORE_STATIC_BINARIES.len() + 1;
     let end_index = start_index + K3S_HOST_UTILITIES.len() - 1;
     let total = total_build_steps();
     let case_arms = indexed_case_arms(K3S_HOST_UTILITIES, start_index);
-    format!(
+    render_template(
+        "stage-k3s-utilities.sh",
         include_str!("scripts/stage-k3s-utilities.sh"),
-        start_index = start_index,
-        end_index = end_index,
-        utility_packages = k3s_host_utilities_apk_packages(),
-        case_arms = case_arms,
-        total = total,
+        context! {
+            start_index,
+            end_index,
+            utility_packages => k3s_host_utilities_apk_packages(),
+            case_arms,
+            total,
+        },
     )
 }
 
@@ -115,18 +124,21 @@ fn nfs_apk_packages() -> String {
     NFS_PACKAGES.join(" ")
 }
 
-fn nfs_stage_script() -> String {
+fn nfs_stage_script() -> Result<String> {
     let start_index = CORE_STATIC_BINARIES.len() + K3S_HOST_UTILITIES.len() + 1;
     let end_index = start_index + NFS_BINARIES.len() - 1;
     let total = total_build_steps();
     let case_arms = indexed_case_arms(NFS_BINARIES, start_index);
-    format!(
+    render_template(
+        "stage-nfs-utilities.sh",
         include_str!("scripts/stage-nfs-utilities.sh"),
-        start_index = start_index,
-        end_index = end_index,
-        nfs_binaries = NFS_BINARIES.join(" "),
-        case_arms = case_arms,
-        total = total,
+        context! {
+            start_index,
+            end_index,
+            nfs_binaries => NFS_BINARIES.join(" "),
+            case_arms,
+            total,
+        },
     )
 }
 
@@ -164,27 +176,30 @@ pub fn build_rootfs(opts: &BuildRootfsOpts) -> Result<()> {
     let staging = tempfile::tempdir().context("failed to create temp dir")?;
     let staging_path = staging.path();
     let utility_packages = k3s_host_utilities_apk_packages();
-    let utility_stage_script = k3s_host_utilities_stage_script();
+    let utility_stage_script = k3s_host_utilities_stage_script()?;
     let utility_out_paths = k3s_host_utilities_out_paths();
     let nfs_packages = nfs_apk_packages();
-    let nfs_stage_script = nfs_stage_script();
+    let nfs_stage_script = nfs_stage_script()?;
     let nfs_out_paths = nfs_out_paths();
     let nfs_binaries_list = NFS_BINARIES.join(" ");
     let total = total_build_steps();
 
     // Step 1: Build core static binaries and stage packaged k3s host utilities.
     println!("==> Building rootfs binaries via Docker ({docker_platform})");
-    let docker_script = format!(
+    let docker_script = render_template(
+        "build-rootfs-binaries.sh",
         include_str!("scripts/build-rootfs-binaries.sh"),
-        utility_packages = utility_packages,
-        nfs_packages = nfs_packages,
-        total = total,
-        utility_stage_script = utility_stage_script,
-        nfs_stage_script = nfs_stage_script,
-        utility_out_paths = utility_out_paths,
-        nfs_out_paths = nfs_out_paths,
-        nfs_binaries_list = nfs_binaries_list,
-    );
+        context! {
+            utility_packages,
+            nfs_packages,
+            total,
+            utility_stage_script,
+            nfs_stage_script,
+            utility_out_paths,
+            nfs_out_paths,
+            nfs_binaries_list,
+        },
+    )?;
 
     let out_mount = format!("{}:/out", staging_path.display());
     cmd!(
@@ -267,7 +282,7 @@ fn build_rootfs_tree(rootfs: &Path, staging: &Path) -> Result<()> {
     fs::create_dir_all(&bin_dir)?;
     copy_executable(&staging.join("busybox"), &bin_dir.join("busybox"))?;
     for cmd in BUSYBOX_SYMLINKS {
-        std::os::unix::fs::symlink("busybox", bin_dir.join(cmd))?;
+        fs::os::unix::fs::symlink("busybox", bin_dir.join(cmd))?;
     }
 
     // /sbin — system binaries
@@ -282,7 +297,7 @@ fn build_rootfs_tree(rootfs: &Path, staging: &Path) -> Result<()> {
         copy_executable(&staging.join(binary), &sbin_dir.join(binary))?;
     }
     for link in IPTABLES_SYMLINKS {
-        std::os::unix::fs::symlink("iptables", sbin_dir.join(link))?;
+        fs::os::unix::fs::symlink("iptables", sbin_dir.join(link))?;
     }
 
     // /lib — dynamic loader and shared libs for packaged utilities.
@@ -330,28 +345,14 @@ fn build_rootfs_tree(rootfs: &Path, staging: &Path) -> Result<()> {
 fn write_boot_sequence(rootfs: &Path) -> Result<()> {
     let sbin_dir = rootfs.join("sbin");
     fs::create_dir_all(&sbin_dir)?;
-    std::os::unix::fs::symlink("/bin/busybox", sbin_dir.join("init"))?;
+    fs::os::unix::fs::symlink("/bin/busybox", sbin_dir.join("init"))?;
 
     let etc_dir = rootfs.join("etc");
     let init_d_dir = etc_dir.join("init.d");
     fs::create_dir_all(&init_d_dir)?;
     fs::write(etc_dir.join("inittab"), inittab())?;
-    fs::write(init_d_dir.join("rcS"), rcs_script())?;
+    fs::write(init_d_dir.join("rcS"), rcs_script()?)?;
     set_executable(&init_d_dir.join("rcS"))?;
-    Ok(())
-}
-
-fn copy_executable(src: &Path, dst: &Path) -> Result<()> {
-    fs::copy(src, dst)?;
-    set_executable(dst)?;
-    Ok(())
-}
-
-fn set_executable(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    let mut perms = fs::metadata(path)?.permissions();
-    perms.set_mode(0o755);
-    fs::set_permissions(path, perms)?;
     Ok(())
 }
 
@@ -361,6 +362,8 @@ fn mkfs_erofs_block_flag() -> String {
 
 #[cfg(test)]
 mod tests {
+    use fs_err as fs;
+
     use super::{
         FEX_BINARY, FEX_X86_64_BINFMT_ENTRY, inittab, mkfs_erofs_block_flag, rcs_script,
         write_boot_sequence,
@@ -387,7 +390,7 @@ mod tests {
 
     #[test]
     fn rcs_script_runs_agent_init_after_virtiofs_and_fex() {
-        let script = rcs_script();
+        let script = rcs_script().unwrap();
         let mount_arcbox = script.find("mount -t virtiofs arcbox /arcbox").unwrap();
         let fex_check = script.find(&format!("[ -x {FEX_BINARY} ]")).unwrap();
         let agent_init = script.find("/arcbox/bin/arcbox-agent init").unwrap();
@@ -426,31 +429,31 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let root = std::env::temp_dir().join(format!("arcbox-boot-seq-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).unwrap();
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
 
         write_boot_sequence(&root).unwrap();
 
         // /sbin/init is a symlink to the busybox multi-call binary (init applet).
         let init = root.join("sbin/init");
         assert_eq!(
-            std::fs::read_link(&init).unwrap(),
+            fs::read_link(&init).unwrap(),
             std::path::Path::new("/bin/busybox")
         );
 
         // /etc/inittab carries the supervision entries.
-        let tab = std::fs::read_to_string(root.join("etc/inittab")).unwrap();
+        let tab = fs::read_to_string(root.join("etc/inittab")).unwrap();
         assert!(tab.contains("::sysinit:/etc/init.d/rcS"));
         assert!(tab.contains("::respawn:/arcbox/bin/arcbox-agent"));
 
         // /etc/init.d/rcS is executable and runs the one-shot init after mounting.
         let rcs = root.join("etc/init.d/rcS");
-        let body = std::fs::read_to_string(&rcs).unwrap();
+        let body = fs::read_to_string(&rcs).unwrap();
         assert!(body.contains("mount -t virtiofs arcbox /arcbox"));
         assert!(body.contains("/arcbox/bin/arcbox-agent init"));
-        let mode = std::fs::metadata(&rcs).unwrap().permissions().mode();
+        let mode = fs::metadata(&rcs).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o755, "rcS must be executable");
 
-        std::fs::remove_dir_all(&root).ok();
+        fs::remove_dir_all(&root).ok();
     }
 }

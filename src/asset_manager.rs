@@ -1,11 +1,11 @@
 use std::path::{Path, PathBuf};
 
-use crate::download::{
-    PreparePhase, PrepareProgress, ProgressCallback, cdn_url, current_arch, download_and_verify,
-    sha256_file,
-};
+use crate::download::{PreparePhase, PrepareProgress, ProgressCallback, download_and_verify};
 use crate::error::{Error, Result};
 use crate::manifest::{Manifest, schema_version_for};
+use crate::util::{
+    cdn_url, current_arch, manifest_object_path, read_json_file_async, sha256_file_async,
+};
 
 const DEFAULT_CDN_BASE_URL: &str = "https://boot.arcboxcdn.com";
 
@@ -182,10 +182,8 @@ impl AssetManager {
         }
 
         // Download from CDN (no pre-known checksum; validated via schema after parsing).
-        let url = cdn_url(
-            &self.config.cdn_base_url,
-            &format!("asset/v{}/manifest.json", self.config.version),
-        )?;
+        let manifest_object = manifest_object_path(&self.config.version);
+        let url = cdn_url(&self.config.cdn_base_url, manifest_object.as_str())?;
         self.download_raw(&url, &manifest_path).await?;
 
         self.load_cached_manifest(version_dir).await
@@ -194,10 +192,7 @@ impl AssetManager {
     /// Load and parse a cached manifest.json.
     async fn load_cached_manifest(&self, version_dir: &Path) -> Result<Manifest> {
         let manifest_path = version_dir.join("manifest.json");
-        let bytes = tokio::fs::read(&manifest_path).await?;
-        let manifest: Manifest = serde_json::from_slice(&bytes)
-            .map_err(|e| Error::Other(format!("failed to parse manifest: {e}")))?;
-        Ok(manifest)
+        read_json_file_async(&manifest_path).await
     }
 
     /// Ensure a file exists with correct checksum; download if missing or mismatched.
@@ -211,7 +206,7 @@ impl AssetManager {
     ) -> Result<()> {
         // Check cache.
         if dest.exists()
-            && let Ok(actual) = sha256_file(dest).await
+            && let Ok(actual) = sha256_file_async(dest).await
             && actual == expected_sha256
         {
             if let Some(cb) = progress {

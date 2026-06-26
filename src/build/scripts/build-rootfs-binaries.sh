@@ -8,12 +8,12 @@ apk add --no-cache \
   lzo-dev \
   zstd-dev zstd-static \
   busybox-static ca-certificates \
-  {utility_packages} \
-  {nfs_packages}
+  {{ utility_packages }} \
+  {{ nfs_packages }}
 
 # 1. busybox (pre-built static from Alpine)
 cp /bin/busybox.static /out/busybox
-echo "[1/{total}] busybox (static) OK"
+echo "[1/{{ total }}] busybox (static) OK"
 
 # 2. mkfs.btrfs (static build from source)
 cd /tmp
@@ -27,7 +27,7 @@ LDFLAGS="-static" ./configure \
 make -j$(nproc) mkfs.btrfs
 strip mkfs.btrfs
 cp mkfs.btrfs /out/
-echo "[2/{total}] mkfs.btrfs (static) OK"
+echo "[2/{{ total }}] mkfs.btrfs (static) OK"
 
 # 3. iptables-legacy (static build from source)
 cd /tmp
@@ -45,17 +45,17 @@ CPPFLAGS="-D__UAPI_DEF_ETHHDR=0 -include netinet/if_ether.h" \
 make LDFLAGS="-all-static" -j$(nproc)
 strip iptables/xtables-legacy-multi
 cp iptables/xtables-legacy-multi /out/iptables
-echo "[3/{total}] iptables-legacy (static) OK"
+echo "[3/{{ total }}] iptables-legacy (static) OK"
 
-{utility_stage_script}
+{{ utility_stage_script }}
 
-{nfs_stage_script}
+{{ nfs_stage_script }}
 
 # Shared libraries needed by packaged utilities.
 mkdir -p /out/lib
 cp -L /lib/ld-musl-*.so.1 /out/lib/
-for bin in {utility_out_paths} {nfs_out_paths}; do
-  ldd "$bin" | awk '/=>/ {{ print $3 }} /^\// {{ print $1 }}' | while read -r lib; do
+for bin in {{ utility_out_paths }} {{ nfs_out_paths }}; do
+  ldd "$bin" | awk '/=>/ { print $3 } /^\// { print $1 }' | while read -r lib; do
     if [ -f "$lib" ]; then
       cp -L "$lib" "/out/lib/$(basename "$lib")"
     fi
@@ -75,7 +75,7 @@ for bin in busybox mkfs.btrfs iptables; do
     echo "static OK"
   fi
 done
-for bin in {utility_packages} {nfs_binaries_list}; do
+for bin in {{ utility_packages }} {{ nfs_binaries_list }}; do
   printf "  %-16s " "$bin"
   if ldd "/out/$bin" >/dev/null 2>&1; then
     echo "dynamic OK"
@@ -83,4 +83,4 @@ for bin in {utility_packages} {nfs_binaries_list}; do
     echo "static OK"
   fi
 done
-ls -lh /out/busybox /out/mkfs.btrfs /out/iptables {utility_out_paths} {nfs_out_paths}
+ls -lh /out/busybox /out/mkfs.btrfs /out/iptables {{ utility_out_paths }} {{ nfs_out_paths }}

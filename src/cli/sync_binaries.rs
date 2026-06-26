@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::Args;
 
-use crate::build::sync_binaries::{sync_binaries, SyncBinariesOpts};
+use crate::build::sync_binaries::{SyncBinariesOpts, sync_binaries};
 
 const DEFAULT_ARCHES: &[&str] = &["arm64", "x86_64"];
 

@@ -5,6 +5,7 @@ use clap::Args;
 
 use crate::build::release::merge_manifests;
 use arcbox_boot::manifest::Manifest;
+use arcbox_boot::util::{read_json_file, write_json_pretty};
 
 #[derive(Args)]
 pub struct MergeManifestArgs {
@@ -22,11 +23,8 @@ impl MergeManifestArgs {
             .manifests
             .iter()
             .map(|p| {
-                let bytes =
-                    std::fs::read(p).with_context(|| format!("failed to read {}", p.display()))?;
-                let m: Manifest = serde_json::from_slice(&bytes)
-                    .with_context(|| format!("failed to parse {}", p.display()))?;
-                Ok(m)
+                read_json_file::<Manifest>(p)
+                    .with_context(|| format!("failed to load manifest {}", p.display()))
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -35,8 +33,7 @@ impl MergeManifestArgs {
             merge_manifests(&mut base, other)?;
         }
 
-        let json = serde_json::to_string_pretty(&base)?;
-        std::fs::write(&self.output, &json)?;
+        write_json_pretty(&self.output, &base)?;
 
         println!(
             "==> Merged {} manifests -> {} ({} targets, {} binaries)",

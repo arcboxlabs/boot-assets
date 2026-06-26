@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::Args;
 
-use crate::build::fex::{build_fex, BuildFexOpts};
+use crate::build::fex::{BuildFexOpts, build_fex};
 
 const DEFAULT_FEX_REPO: &str = "https://github.com/FEX-Emu/FEX.git";
 const DEFAULT_FEX_REF: &str = "FEX-2605";

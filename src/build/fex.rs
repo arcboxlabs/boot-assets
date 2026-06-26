@@ -4,10 +4,12 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use fs_err as fs;
 use goblin::elf::{Elf, program_header::PT_INTERP};
-use sha2::{Digest, Sha256};
-use xshell::{cmd, Shell};
+use xshell::{Shell, cmd};
 
 use arcbox_boot::manifest::{Binary, BinaryTarget};
+use arcbox_boot::util::{
+    binary_object_path, read_json_file, set_executable, sha256_file, write_json_pretty,
+};
 
 const FEX_ARCH: &str = "arm64";
 const FEX_BINARIES: &[&str] = &["FEX"];
@@ -147,8 +149,8 @@ fn stage_fex(build: &Path, output: &Path, version: &str) -> Result<Vec<Binary>> 
 /// [`configure_fex`] removes that dependency; this guard ensures it actually
 /// took effect.
 ///
-/// The FEX build must produce a valid ELF binary. Parse it directly instead of
-/// shelling out to `readelf`, so the check is independent of host tooling.
+/// The FEX build must produce a valid ELF binary. Parse it directly so the
+/// check is independent of host tooling.
 fn assert_static_executable(path: &Path) -> Result<()> {
     let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
     let elf = Elf::parse(&bytes)
@@ -182,19 +184,13 @@ fn stage_file(
     fs::copy(src, &dest)
         .with_context(|| format!("failed to copy {} to {}", src.display(), dest.display()))?;
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(&dest)?.permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&dest, perms)?;
-    }
+    set_executable(&dest)?;
 
     let mut targets = BTreeMap::new();
     targets.insert(
         FEX_ARCH.to_string(),
         BinaryTarget {
-            path: format!("bin/{name}/{version}/{FEX_ARCH}/{name}"),
+            path: binary_object_path(name, version, FEX_ARCH),
             sha256: sha256_file(&dest)?,
         },
     );
@@ -209,9 +205,7 @@ fn stage_file(
 
 fn append_binaries_json(path: &Path, mut entries: Vec<Binary>) -> Result<()> {
     let mut existing = if path.exists() {
-        let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
-        serde_json::from_slice::<Vec<Binary>>(&bytes)
-            .with_context(|| format!("failed to parse {}", path.display()))?
+        read_json_file::<Vec<Binary>>(path)?
     } else {
         Vec::new()
     };
@@ -220,11 +214,5 @@ fn append_binaries_json(path: &Path, mut entries: Vec<Binary>) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(path, serde_json::to_string_pretty(&existing)?)
-        .with_context(|| format!("failed to write {}", path.display()))
-}
-
-fn sha256_file(path: &Path) -> Result<String> {
-    let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
-    Ok(format!("{:x}", Sha256::digest(&bytes)))
+    write_json_pretty(path, &existing)
 }
