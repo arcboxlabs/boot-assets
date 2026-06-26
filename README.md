@@ -91,6 +91,70 @@ boot-assets merge-manifest dist/arm64/manifest.json dist/x86_64/manifest.json \
 
 ## Build And Release
 
+### Verification
+
+Local checks use the same commands as CI:
+
+```bash
+cargo fmt --check
+cargo clippy --all-features -- -D warnings
+cargo test --all-features --lib --bins
+cargo build --features build --no-default-features
+cargo test --features build --no-default-features --test e2e -- --nocapture
+```
+
+The Rust E2E target in `tests/e2e/` is organized as one Cargo integration test
+crate with submodules. The default local E2E does not require a hypervisor. It
+validates the published artifact contract: per-arch release tarballs contain the
+expected files and checksums, the unified manifest points at the expected CDN
+object paths with matching SHA256 values, and `AssetManager` can consume the
+published layout over a real local HTTP server by downloading kernel/rootfs plus
+runtime binaries into their install locations. This gives a Linux-compatible
+product smoke test before higher-level VM/HV validation.
+
+To validate a real published environment, run the ignored live E2E test against
+the CDN. Omit `BOOT_ASSETS_LIVE_VERSION` to resolve `latest.json`:
+
+```bash
+BOOT_ASSETS_LIVE_CDN_BASE_URL=https://boot.arcboxcdn.com \
+BOOT_ASSETS_LIVE_VERSION=0.5.1 \
+BOOT_ASSETS_LIVE_ARCH=x86_64 \
+BOOT_ASSETS_LIVE_PREPARE_BINARIES=true \
+cargo test --features download --no-default-features --test e2e live::live_published_boot_assets_are_consumable -- --ignored --nocapture
+```
+
+To prove the kernel and rootfs boot as a real Linux system, run the QEMU boot
+E2E test. This currently targets x86_64 and waits for the guest to reach Linux
+userspace (`/sbin/init`) from the EROFS rootfs. Prefer passing local artifacts
+from the current build:
+
+```bash
+# Requires qemu-system-x86_64 on PATH.
+BOOT_ASSETS_RELEASE_TARBALL=dist/x86_64/boot-assets-x86_64-v0.5.1.tar.gz \
+cargo test --features download --no-default-features --test e2e boot::qemu_boots_x86_64_linux -- --ignored --nocapture
+```
+
+You can also pass unpacked local artifacts directly:
+
+```bash
+BOOT_ASSETS_BOOT_KERNEL=dist/x86_64/kernel \
+BOOT_ASSETS_BOOT_ROOTFS=dist/x86_64/rootfs.erofs \
+BOOT_ASSETS_BOOT_CMDLINE="console=ttyS0 root=/dev/vda ro rootfstype=erofs earlycon" \
+cargo test --features download --no-default-features --test e2e boot::qemu_boots_x86_64_linux -- --ignored --nocapture
+```
+
+If no local artifacts are provided, the same test falls back to the live CDN:
+
+```bash
+BOOT_ASSETS_LIVE_CDN_BASE_URL=https://boot.arcboxcdn.com \
+BOOT_ASSETS_LIVE_VERSION=0.5.1 \
+BOOT_ASSETS_LIVE_ARCH=x86_64 \
+cargo test --features download --no-default-features --test e2e boot::qemu_boots_x86_64_linux -- --ignored --nocapture
+```
+
+GitHub Actions also exposes these as the manual `Live E2E` workflow for testing
+actual published boot-assets on Linux, including an optional QEMU boot step.
+
 ### CI release workflow
 
 Workflow file: `.github/workflows/release.yml`

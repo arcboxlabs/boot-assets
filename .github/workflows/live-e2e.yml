@@ -1,0 +1,79 @@
+name: Live E2E
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Published boot-assets version. Leave empty to read latest.json."
+        required: false
+        type: string
+      cdn_base_url:
+        description: "CDN base URL"
+        required: false
+        default: "https://boot.arcboxcdn.com"
+        type: string
+      arch:
+        description: "Target architecture to consume"
+        required: false
+        default: "x86_64"
+        type: choice
+        options:
+          - x86_64
+          - arm64
+      prepare_binaries:
+        description: "Also download and validate runtime binaries"
+        required: false
+        default: true
+        type: boolean
+      boot_linux:
+        description: "Boot the published kernel/rootfs under QEMU (x86_64 only)"
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  live-e2e:
+    name: Consume published boot-assets
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-live-e2e-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-live-e2e-cargo-
+
+      - name: Live E2E against published artifacts
+        run: cargo test --features download --no-default-features --test e2e live::live_published_boot_assets_are_consumable -- --ignored --nocapture
+        env:
+          BOOT_ASSETS_LIVE_CDN_BASE_URL: ${{ inputs.cdn_base_url }}
+          BOOT_ASSETS_LIVE_VERSION: ${{ inputs.version }}
+          BOOT_ASSETS_LIVE_ARCH: ${{ inputs.arch }}
+          BOOT_ASSETS_LIVE_PREPARE_BINARIES: ${{ inputs.prepare_binaries }}
+
+      - name: Install QEMU
+        if: ${{ inputs.boot_linux && inputs.arch == 'x86_64' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86
+
+      - name: Boot published Linux under QEMU
+        if: ${{ inputs.boot_linux && inputs.arch == 'x86_64' }}
+        run: cargo test --features download --no-default-features --test e2e boot::qemu_boots_x86_64_linux -- --ignored --nocapture
+        env:
+          BOOT_ASSETS_LIVE_CDN_BASE_URL: ${{ inputs.cdn_base_url }}
+          BOOT_ASSETS_LIVE_VERSION: ${{ inputs.version }}
+          BOOT_ASSETS_LIVE_ARCH: ${{ inputs.arch }}
