@@ -6,6 +6,7 @@ use crate::manifest::{Manifest, schema_version_for};
 use crate::util::{
     cdn_url, current_arch, manifest_object_path, read_json_file_async, sha256_file_async,
 };
+use crate::verify_cache::VerifyCache;
 
 const DEFAULT_CDN_BASE_URL: &str = "https://boot.arcboxcdn.com";
 
@@ -83,6 +84,7 @@ impl AssetManager {
     pub async fn prepare(&self, progress: Option<ProgressCallback>) -> Result<PreparedAssets> {
         let version_dir = self.config.cache_dir.join(&self.config.version);
         tokio::fs::create_dir_all(&version_dir).await?;
+        let mut verify_cache = VerifyCache::load(&version_dir).await;
 
         // Step 1: Fetch and validate manifest.
         let manifest = self.fetch_manifest(&version_dir).await?;
@@ -117,6 +119,7 @@ impl AssetManager {
                 &dest,
                 "kernel",
                 &progress,
+                &mut verify_cache,
             )
             .await?;
             dest
@@ -130,8 +133,11 @@ impl AssetManager {
             &rootfs_path,
             "rootfs",
             &progress,
+            &mut verify_cache,
         )
         .await?;
+
+        verify_cache.save().await;
 
         Ok(PreparedAssets {
             kernel: kernel_path,
@@ -203,12 +209,9 @@ impl AssetManager {
         dest: &Path,
         name: &str,
         progress: &Option<ProgressCallback>,
+        verify_cache: &mut VerifyCache,
     ) -> Result<()> {
-        // Check cache.
-        if dest.exists()
-            && let Ok(actual) = sha256_file_async(dest).await
-            && actual == expected_sha256
-        {
+        let report_cached = || {
             if let Some(cb) = progress {
                 cb(PrepareProgress {
                     name: name.to_string(),
@@ -217,6 +220,19 @@ impl AssetManager {
                     phase: PreparePhase::Cached,
                 });
             }
+        };
+
+        if verify_cache.is_verified(dest, expected_sha256).await {
+            report_cached();
+            return Ok(());
+        }
+
+        if dest.exists()
+            && let Ok(actual) = sha256_file_async(dest).await
+            && actual == expected_sha256
+        {
+            verify_cache.record(dest, expected_sha256).await;
+            report_cached();
             return Ok(());
         }
 
@@ -235,7 +251,10 @@ impl AssetManager {
                 });
             }
         })
-        .await
+        .await?;
+
+        verify_cache.record(dest, expected_sha256).await;
+        Ok(())
     }
 
     /// Raw download without checksum verification (for manifest).

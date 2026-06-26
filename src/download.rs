@@ -6,6 +6,7 @@ use tokio::io::AsyncWriteExt;
 use crate::error::{Error, Result};
 use crate::manifest::{Binary, BinaryTarget, Manifest};
 use crate::util::{cdn_url, current_arch, hex_encode, set_executable_async, sha256_file_async};
+use crate::verify_cache::VerifyCache;
 
 /// Progress information for binary preparation.
 #[derive(Debug, Clone)]
@@ -54,7 +55,8 @@ impl Manifest {
     /// (e.g. dest_dir=/arcbox/bin, install_dir="kernel" → /arcbox/kernel/{name}).
     ///
     /// For each binary in the manifest:
-    /// 1. If the file already exists and its SHA256 matches, skip it.
+    /// 1. If the file was already verified and its stat signature is unchanged,
+    ///    or the file exists and its SHA256 matches, skip it.
     /// 2. Otherwise, download from `{cdn_base_url}/{path}` and verify
     ///    the checksum.
     ///
@@ -68,6 +70,7 @@ impl Manifest {
         progress: Option<ProgressCallback>,
     ) -> Result<()> {
         tokio::fs::create_dir_all(dest_dir).await?;
+        let mut verify_cache = VerifyCache::load(dest_dir).await;
 
         let total = self.binaries.len();
         for (idx, binary) in self.binaries.iter().enumerate() {
@@ -98,11 +101,16 @@ impl Manifest {
 
             pg(PreparePhase::Checking);
 
-            // Check cache: if file exists and checksum matches, skip download.
+            if verify_cache.is_verified(&dest_path, &bt.sha256).await {
+                pg(PreparePhase::Cached);
+                continue;
+            }
+
             if dest_path.exists()
                 && let Ok(actual) = sha256_file_async(&dest_path).await
                 && actual == bt.sha256
             {
+                verify_cache.record(&dest_path, &bt.sha256).await;
                 pg(PreparePhase::Cached);
                 continue;
             }
@@ -119,16 +127,19 @@ impl Manifest {
             .await?;
 
             set_executable_async(&dest_path).await?;
+            verify_cache.record(&dest_path, &bt.sha256).await;
 
             pg(PreparePhase::Ready);
         }
 
+        verify_cache.save().await;
         Ok(())
     }
 
     /// Validate that all required binaries for `arch` exist with correct
     /// checksums. Uses the same path resolution as [`prepare_binaries`].
     pub async fn validate_binaries(&self, arch: &str, dest_dir: &Path) -> Result<()> {
+        let mut verify_cache = VerifyCache::load(dest_dir).await;
         for binary in &self.binaries {
             let Some(bt) = binary.targets.get(arch) else {
                 continue;
@@ -148,6 +159,10 @@ impl Manifest {
                 )));
             }
 
+            if verify_cache.is_verified(&path, &bt.sha256).await {
+                continue;
+            }
+
             let actual = sha256_file_async(&path).await?;
             if actual != bt.sha256 {
                 return Err(Error::ChecksumMismatch {
@@ -156,7 +171,9 @@ impl Manifest {
                     actual,
                 });
             }
+            verify_cache.record(&path, &bt.sha256).await;
         }
+        verify_cache.save().await;
         Ok(())
     }
 }

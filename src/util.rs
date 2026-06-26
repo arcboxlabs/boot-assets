@@ -85,9 +85,22 @@ pub fn cdn_url(base: &str, path: &str) -> Result<String> {
 #[cfg(feature = "build")]
 pub fn sha256_file(path: &Path) -> AnyhowResult<String> {
     use sha2::{Digest, Sha256};
+    use std::io::Read;
 
-    let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
-    Ok(hex_encode(Sha256::digest(&bytes)))
+    let mut file =
+        fs::File::open(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0; 1024 * 1024];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex_encode(hasher.finalize()))
 }
 
 /// Reads and parses a JSON file with path context on failures.
@@ -124,9 +137,19 @@ pub fn create_tar_gz(output: &Path, work_dir: &Path, files: &[&str]) -> AnyhowRe
 #[cfg(feature = "download")]
 pub async fn sha256_file_async(path: &Path) -> Result<String> {
     use sha2::{Digest, Sha256};
+    use tokio::io::AsyncReadExt;
 
-    let bytes = tokio::fs::read(path).await?;
-    Ok(hex_encode(Sha256::digest(&bytes)))
+    let mut file = tokio::fs::File::open(path).await?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0; 1024 * 1024];
+    loop {
+        let n = file.read(&mut buf).await?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Ok(hex_encode(hasher.finalize()))
 }
 
 #[cfg(any(feature = "download", feature = "build"))]
