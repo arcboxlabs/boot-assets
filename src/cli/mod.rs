@@ -1,6 +1,4 @@
-mod build_fex_runtime;
-mod build_release;
-mod build_rootfs;
+mod build;
 mod merge_manifest;
 mod sync_binaries;
 
@@ -16,12 +14,8 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Build FEX from source and append runtime entries to binaries JSON.
-    BuildFexRuntime(build_fex_runtime::BuildFexRuntimeArgs),
-    /// Build minimal EROFS rootfs from Alpine static binaries.
-    BuildRootfs(build_rootfs::BuildRootfsArgs),
-    /// Assemble a release tarball (kernel + rootfs.erofs + manifest.json).
-    BuildRelease(build_release::BuildReleaseArgs),
+    /// Build boot assets and runtime binaries.
+    Build(build::BuildArgs),
     /// Merge multiple single-arch manifests into one multi-arch manifest.
     MergeManifest(merge_manifest::MergeManifestArgs),
     /// Download upstream binaries and stage them for R2 upload.
@@ -31,9 +25,7 @@ enum Commands {
 impl Cli {
     pub fn run(self) -> Result<()> {
         match self.command {
-            Commands::BuildFexRuntime(args) => args.run(),
-            Commands::BuildRootfs(args) => args.run(),
-            Commands::BuildRelease(args) => args.run(),
+            Commands::Build(args) => args.run(),
             Commands::MergeManifest(args) => args.run(),
             Commands::SyncBinaries(args) => args.run(),
         }

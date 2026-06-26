@@ -67,16 +67,16 @@ The tool is built with Rust. Install with `cargo build --release`.
 
 ```bash
 # Build EROFS rootfs only
-boot-assets build-rootfs --output build/rootfs.erofs --arch arm64
+boot-assets build rootfs --output build/rootfs.erofs --arch arm64
 
 # Full release build (single arch)
-boot-assets build-release \
+boot-assets build release \
   --version 0.2.0 \
   --kernel build/kernel-arm64 \
   --arch arm64
 
 # With pre-built rootfs
-boot-assets build-release \
+boot-assets build release \
   --version 0.2.0 \
   --kernel build/kernel-arm64 \
   --rootfs build/rootfs.erofs \
@@ -124,7 +124,7 @@ cargo build --release
 gh release download v0.1.0 --repo arcboxlabs/kernel --pattern "kernel-arm64" --dir build/
 
 # Full release build
-./target/release/boot-assets build-release \
+./target/release/boot-assets build release \
   --version 0.2.0 \
   --kernel build/kernel-arm64 \
   --arch arm64
@@ -173,8 +173,8 @@ x86_64 container processes can still invoke it even when `/arcbox` is not
 visible inside the container rootfs. If FEX is absent, boot continues normally
 and no x86_64 handler is registered.
 
-FEX is built from source in the release workflow with `boot-assets
-build-fex-runtime`. The command builds the arm64 `FEX` interpreter as a
+FEX is built from source in the release workflow with `boot-assets build fex`.
+The command builds the arm64 `FEX` interpreter as a
 **static-pie** executable (`-static-pie`) and stages it into the binary
 manifest — no dynamic library closure, and no `FEXServer`. Static linking is
 required: the `F` flag pins only the interpreter executable's fd into the

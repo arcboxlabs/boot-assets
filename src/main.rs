@@ -1,9 +1,8 @@
-mod cmd;
-mod release;
-mod rootfs;
+mod build;
+mod cli;
 
 use clap::Parser;
-use cmd::Cli;
+use cli::Cli;
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();

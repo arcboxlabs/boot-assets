@@ -1,7 +1,9 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use anyhow::{Context, Result, bail};
+use fs_err as fs;
+use humansize::{BINARY, format_size};
+use xshell::{cmd, Shell};
 
 const BUSYBOX_SYMLINKS: &[&str] = &[
     "sh", "mount", "umount", "mkdir", "cat", "echo", "sleep", "ln", "chmod", "chown", "cp", "mv",
@@ -70,37 +72,10 @@ fn inittab() -> String {
 /// error so the supervised agent still starts and can report status.
 fn rcs_script() -> String {
     format!(
-        r#"#!/bin/busybox sh
-/bin/busybox mount -t proc proc /proc
-/bin/busybox mount -t sysfs sysfs /sys
-/bin/busybox mount -t devtmpfs devtmpfs /dev
-/bin/busybox mkdir -p /arcbox
-/bin/busybox mount -t virtiofs arcbox /arcbox
-
-# Register FEX for amd64 Linux ELF binaries when the runtime bundle provides
-# {FEX_BINARY}. The POCF flags match upstream FEX's x86_64 binfmt entry: pass the
-# original argv[0], pass the guest binary as an opened fd, preserve file
-# credentials, and pin the interpreter at registration time. FEX_ROOTFS is left
-# unset so OCI containers use their own amd64 rootfs for guest libraries.
-if [ -x {FEX_BINARY} ]; then
-  /bin/busybox mkdir -p /proc/sys/fs/binfmt_misc
-  if [ ! -e /proc/sys/fs/binfmt_misc/register ]; then
-    /bin/busybox mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc 2>/dev/null || true
-  fi
-  if [ -e /proc/sys/fs/binfmt_misc/register ]; then
-    if [ -e /proc/sys/fs/binfmt_misc/FEX-x86_64 ]; then
-      /bin/busybox echo -1 > /proc/sys/fs/binfmt_misc/FEX-x86_64 2>/dev/null || true
-    fi
-    /bin/busybox ln -snf /proc/self/fd /dev/fd
-    /bin/busybox printf '%s\n' '{FEX_X86_64_BINFMT_ENTRY}' > /proc/sys/fs/binfmt_misc/register 2>/dev/null || true
-  fi
-fi
-
-# One-shot guest system init (mounts, networking, /etc). Returns on completion;
-# busybox init then respawns the long-running agent via the inittab entry.
-# `|| true` keeps a non-fatal init error from aborting sysinit.
-{AGENT_BIN} init || true
-"#
+        include_str!("scripts/rcS.sh"),
+        FEX_BINARY = FEX_BINARY,
+        FEX_X86_64_BINFMT_ENTRY = FEX_X86_64_BINFMT_ENTRY,
+        AGENT_BIN = AGENT_BIN,
     )
 }
 
@@ -117,17 +92,15 @@ fn k3s_host_utilities_stage_script() -> String {
     let start_index = CORE_STATIC_BINARIES.len() + 1;
     let end_index = start_index + K3S_HOST_UTILITIES.len() - 1;
     let total = total_build_steps();
-    let mut script = format!(
-        "# {start_index}-{end_index}. k3s host utilities from Alpine packages.\nfor bin in {} ; do\n  src=\"$(command -v \"$bin\")\"\n  cp \"$src\" \"/out/$bin\"\n  case \"$bin\" in\n",
-        k3s_host_utilities_apk_packages()
-    );
-    for (offset, binary) in K3S_HOST_UTILITIES.iter().enumerate() {
-        script.push_str(&format!("    {binary}) idx={} ;;\n", start_index + offset));
-    }
-    script.push_str(&format!(
-        "  esac\n  echo \"[$idx/{total}] $bin OK\"\ndone\n"
-    ));
-    script
+    let case_arms = indexed_case_arms(K3S_HOST_UTILITIES, start_index);
+    format!(
+        include_str!("scripts/stage-k3s-utilities.sh"),
+        start_index = start_index,
+        end_index = end_index,
+        utility_packages = k3s_host_utilities_apk_packages(),
+        case_arms = case_arms,
+        total = total,
+    )
 }
 
 fn k3s_host_utilities_out_paths() -> String {
@@ -146,17 +119,23 @@ fn nfs_stage_script() -> String {
     let start_index = CORE_STATIC_BINARIES.len() + K3S_HOST_UTILITIES.len() + 1;
     let end_index = start_index + NFS_BINARIES.len() - 1;
     let total = total_build_steps();
-    let mut script = format!(
-        "# {start_index}-{end_index}. NFS server utilities from Alpine packages.\nfor bin in {} ; do\n  src=\"$(command -v \"$bin\")\"\n  cp \"$src\" \"/out/$bin\"\n  case \"$bin\" in\n",
-        NFS_BINARIES.join(" ")
-    );
-    for (offset, binary) in NFS_BINARIES.iter().enumerate() {
-        script.push_str(&format!("    {binary}) idx={} ;;\n", start_index + offset));
-    }
-    script.push_str(&format!(
-        "  esac\n  echo \"[$idx/{total}] $bin OK\"\ndone\n"
-    ));
-    script
+    let case_arms = indexed_case_arms(NFS_BINARIES, start_index);
+    format!(
+        include_str!("scripts/stage-nfs-utilities.sh"),
+        start_index = start_index,
+        end_index = end_index,
+        nfs_binaries = NFS_BINARIES.join(" "),
+        case_arms = case_arms,
+        total = total,
+    )
+}
+
+fn indexed_case_arms(binaries: &[&str], start_index: usize) -> String {
+    binaries
+        .iter()
+        .enumerate()
+        .map(|(offset, binary)| format!("    {binary}) idx={} ;;\n", start_index + offset))
+        .collect()
 }
 
 fn nfs_out_paths() -> String {
@@ -181,6 +160,7 @@ pub fn build_rootfs(opts: &BuildRootfsOpts) -> Result<()> {
         other => bail!("unsupported arch: {other}"),
     };
 
+    let sh = Shell::new()?;
     let staging = tempfile::tempdir().context("failed to create temp dir")?;
     let staging_path = staging.path();
     let utility_packages = k3s_host_utilities_apk_packages();
@@ -195,114 +175,24 @@ pub fn build_rootfs(opts: &BuildRootfsOpts) -> Result<()> {
     // Step 1: Build core static binaries and stage packaged k3s host utilities.
     println!("==> Building rootfs binaries via Docker ({docker_platform})");
     let docker_script = format!(
-        r#"
-set -e
-
-apk add --no-cache \
-  build-base git autoconf automake libtool pkgconf \
-  linux-headers \
-  util-linux-dev util-linux-static \
-  zlib-dev zlib-static \
-  lzo-dev \
-  zstd-dev zstd-static \
-  busybox-static ca-certificates \
-  {utility_packages} \
-  {nfs_packages}
-
-# 1. busybox (pre-built static from Alpine)
-cp /bin/busybox.static /out/busybox
-echo "[1/{total}] busybox (static) OK"
-
-# 2. mkfs.btrfs (static build from source)
-cd /tmp
-git clone --depth 1 --branch v6.12 https://github.com/kdave/btrfs-progs.git
-cd btrfs-progs
-./autogen.sh
-LDFLAGS="-static" ./configure \
-  --disable-documentation --disable-python \
-  --disable-zoned --disable-libudev \
-  --disable-convert --disable-backtrace
-make -j$(nproc) mkfs.btrfs
-strip mkfs.btrfs
-cp mkfs.btrfs /out/
-echo "[2/{total}] mkfs.btrfs (static) OK"
-
-# 3. iptables-legacy (static build from source)
-cd /tmp
-wget -q https://www.netfilter.org/projects/iptables/files/iptables-1.8.11.tar.xz
-tar -xf iptables-1.8.11.tar.xz
-cd iptables-1.8.11
-# Fix musl header conflict: linux/if_ether.h and netinet/if_ether.h
-# both define struct ethhdr without mutual guards. Disable the kernel
-# UAPI definition and force-include the userspace header so ethhdr is
-# always available regardless of source include order.
-CPPFLAGS="-D__UAPI_DEF_ETHHDR=0 -include netinet/if_ether.h" \
-./configure \
-  --enable-static --disable-shared \
-  --disable-nftables --disable-connlabel
-make LDFLAGS="-all-static" -j$(nproc)
-strip iptables/xtables-legacy-multi
-cp iptables/xtables-legacy-multi /out/iptables
-echo "[3/{total}] iptables-legacy (static) OK"
-
-{utility_stage_script}
-
-{nfs_stage_script}
-
-# Shared libraries needed by packaged utilities.
-mkdir -p /out/lib
-cp -L /lib/ld-musl-*.so.1 /out/lib/
-for bin in {utility_out_paths} {nfs_out_paths}; do
-  ldd "$bin" | awk '/=>/ {{ print $3 }} /^\// {{ print $1 }}' | while read -r lib; do
-    if [ -f "$lib" ]; then
-      cp -L "$lib" "/out/lib/$(basename "$lib")"
-    fi
-  done
-done
-
-# CA certificates
-cp /etc/ssl/certs/ca-certificates.crt /out/ca-certificates.crt
-
-# Verify rootfs binaries and utility dependencies.
-echo "=== Verification ==="
-for bin in busybox mkfs.btrfs iptables; do
-  printf "  %-16s " "$bin"
-  if ldd "/out/$bin" >/dev/null 2>&1; then
-    echo "DYNAMIC (WARNING)"
-  else
-    echo "static OK"
-  fi
-done
-for bin in {utility_packages} {nfs_binaries_list}; do
-  printf "  %-16s " "$bin"
-  if ldd "/out/$bin" >/dev/null 2>&1; then
-    echo "dynamic OK"
-  else
-    echo "static OK"
-  fi
-done
-ls -lh /out/busybox /out/mkfs.btrfs /out/iptables {utility_out_paths} {nfs_out_paths}
-"#
+        include_str!("scripts/build-rootfs-binaries.sh"),
+        utility_packages = utility_packages,
+        nfs_packages = nfs_packages,
+        total = total,
+        utility_stage_script = utility_stage_script,
+        nfs_stage_script = nfs_stage_script,
+        utility_out_paths = utility_out_paths,
+        nfs_out_paths = nfs_out_paths,
+        nfs_binaries_list = nfs_binaries_list,
     );
 
-    let status = Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "--platform",
-            docker_platform,
-            "-v",
-            &format!("{}:/out", staging_path.display()),
-            "alpine:3.19",
-            "sh",
-            "-c",
-            &docker_script,
-        ])
-        .status()
-        .context("failed to run docker")?;
-    if !status.success() {
-        bail!("docker static build failed");
-    }
+    let out_mount = format!("{}:/out", staging_path.display());
+    cmd!(
+        sh,
+        "docker run --rm --platform {docker_platform} -v {out_mount} alpine:3.19 sh -c {docker_script}"
+    )
+    .run()
+    .context("docker static build failed")?;
 
     // Step 2: Build rootfs staging directory.
     println!("==> Building EROFS rootfs staging directory");
@@ -311,9 +201,15 @@ ls -lh /out/busybox /out/mkfs.btrfs /out/iptables {utility_out_paths} {nfs_out_p
 
     // Step 3: Create EROFS image.
     println!("==> Creating EROFS image");
-    build_erofs_image_with_docker(docker_platform, &rootfs, &opts.output, &opts.compression)?;
+    build_erofs_image_with_docker(
+        &sh,
+        docker_platform,
+        &rootfs,
+        &opts.output,
+        &opts.compression,
+    )?;
 
-    let size = humanize_size(std::fs::metadata(&opts.output)?.len());
+    let size = format_size(fs::metadata(&opts.output)?.len(), BINARY);
     println!();
     println!("==> EROFS rootfs built: {} ({size})", opts.output.display());
     println!("    Compression: {}", opts.compression);
@@ -327,6 +223,7 @@ ls -lh /out/busybox /out/mkfs.btrfs /out/iptables {utility_out_paths} {nfs_out_p
 }
 
 fn build_erofs_image_with_docker(
+    sh: &Shell,
     docker_platform: &str,
     rootfs: &Path,
     output: &Path,
@@ -339,46 +236,27 @@ fn build_erofs_image_with_docker(
     let output_dir = output
         .parent()
         .ok_or_else(|| anyhow::anyhow!("output path has no parent: {}", output.display()))?;
-    std::fs::create_dir_all(output_dir)?;
+    fs::create_dir_all(output_dir)?;
 
     // Copy the host-assembled tree into a container-local overlay so we can create
     // the /dev/console and /dev/null device nodes busybox init expects at PID 1
     // startup. The bind-mounted /rootfs is macOS-backed and read-only and cannot
     // hold Linux device nodes, so they are created here in the Linux overlay and
     // then packed by mkfs.erofs (which sources /build, not /rootfs).
-    let install_and_run = "apk add --no-cache erofs-utils >/dev/null && \
-        cp -a /rootfs /build && \
-        mknod -m 600 /build/dev/console c 5 1 && \
-        mknod -m 666 /build/dev/null c 1 3 && \
-        exec mkfs.erofs \"$@\"";
+    let install_and_run = include_str!("scripts/mkfs-erofs.sh");
 
-    let status = Command::new("docker")
-        .args([
-            "run",
-            "--rm",
-            "--platform",
-            docker_platform,
-            "-v",
-            &format!("{}:/rootfs:ro", rootfs.display()),
-            "-v",
-            &format!("{}:/out", output_dir.display()),
-            "alpine:3.19",
-            "sh",
-            "-c",
-            install_and_run,
-            // Everything after here becomes positional args ($@) for mkfs.erofs.
-            "--",
-        ])
-        .arg(mkfs_erofs_block_flag())
-        .arg(format!("-x{EROFS_XATTR_TOLERANCE}"))
-        .arg(format!("-z{compression}"))
-        .arg(format!("/out/{output_name}"))
-        .arg("/build")
-        .status()
-        .context("failed to run docker for mkfs.erofs")?;
-    if !status.success() {
-        bail!("docker mkfs.erofs failed");
-    }
+    let rootfs_mount = format!("{}:/rootfs:ro", rootfs.display());
+    let output_mount = format!("{}:/out", output_dir.display());
+    let block_flag = mkfs_erofs_block_flag();
+    let xattr_flag = format!("-x{EROFS_XATTR_TOLERANCE}");
+    let compression_flag = format!("-z{compression}");
+    let output_path = format!("/out/{output_name}");
+    cmd!(
+        sh,
+        "docker run --rm --platform {docker_platform} -v {rootfs_mount} -v {output_mount} alpine:3.19 sh -c {install_and_run} -- {block_flag} {xattr_flag} {compression_flag} {output_path} /build"
+    )
+    .run()
+    .context("docker mkfs.erofs failed")?;
 
     Ok(())
 }
@@ -386,7 +264,7 @@ fn build_erofs_image_with_docker(
 fn build_rootfs_tree(rootfs: &Path, staging: &Path) -> Result<()> {
     // /bin — busybox + symlinks
     let bin_dir = rootfs.join("bin");
-    std::fs::create_dir_all(&bin_dir)?;
+    fs::create_dir_all(&bin_dir)?;
     copy_executable(&staging.join("busybox"), &bin_dir.join("busybox"))?;
     for cmd in BUSYBOX_SYMLINKS {
         std::os::unix::fs::symlink("busybox", bin_dir.join(cmd))?;
@@ -394,7 +272,7 @@ fn build_rootfs_tree(rootfs: &Path, staging: &Path) -> Result<()> {
 
     // /sbin — system binaries
     let sbin_dir = rootfs.join("sbin");
-    std::fs::create_dir_all(&sbin_dir)?;
+    fs::create_dir_all(&sbin_dir)?;
     copy_executable(&staging.join("mkfs.btrfs"), &sbin_dir.join("mkfs.btrfs"))?;
     copy_executable(&staging.join("iptables"), &sbin_dir.join("iptables"))?;
     for binary in K3S_HOST_UTILITIES {
@@ -409,29 +287,29 @@ fn build_rootfs_tree(rootfs: &Path, staging: &Path) -> Result<()> {
 
     // /lib — dynamic loader and shared libs for packaged utilities.
     let lib_dir = rootfs.join("lib");
-    std::fs::create_dir_all(&lib_dir)?;
+    fs::create_dir_all(&lib_dir)?;
     let staged_lib_dir = staging.join("lib");
     if staged_lib_dir.is_dir() {
-        for entry in std::fs::read_dir(staged_lib_dir)? {
+        for entry in fs::read_dir(staged_lib_dir)? {
             let entry = entry?;
             let path = entry.path();
             if path.is_file() {
-                std::fs::copy(&path, lib_dir.join(entry.file_name()))?;
+                fs::copy(&path, lib_dir.join(entry.file_name()))?;
             }
         }
     }
 
     // /cacerts
     let cacerts_dir = rootfs.join("cacerts");
-    std::fs::create_dir_all(&cacerts_dir)?;
-    std::fs::copy(
+    fs::create_dir_all(&cacerts_dir)?;
+    fs::copy(
         staging.join("ca-certificates.crt"),
         cacerts_dir.join("ca-certificates.crt"),
     )?;
 
     // Mount point directories
     for dir in MOUNT_DIRS {
-        std::fs::create_dir_all(rootfs.join(dir))?;
+        fs::create_dir_all(rootfs.join(dir))?;
     }
 
     // /sbin/init symlink + /etc/inittab + /etc/init.d/rcS — the busybox init
@@ -451,46 +329,34 @@ fn build_rootfs_tree(rootfs: &Path, staging: &Path) -> Result<()> {
 /// mkfs.erofs (the macOS-backed staging tree can't hold device nodes).
 fn write_boot_sequence(rootfs: &Path) -> Result<()> {
     let sbin_dir = rootfs.join("sbin");
-    std::fs::create_dir_all(&sbin_dir)?;
+    fs::create_dir_all(&sbin_dir)?;
     std::os::unix::fs::symlink("/bin/busybox", sbin_dir.join("init"))?;
 
     let etc_dir = rootfs.join("etc");
     let init_d_dir = etc_dir.join("init.d");
-    std::fs::create_dir_all(&init_d_dir)?;
-    std::fs::write(etc_dir.join("inittab"), inittab())?;
-    std::fs::write(init_d_dir.join("rcS"), rcs_script())?;
+    fs::create_dir_all(&init_d_dir)?;
+    fs::write(etc_dir.join("inittab"), inittab())?;
+    fs::write(init_d_dir.join("rcS"), rcs_script())?;
     set_executable(&init_d_dir.join("rcS"))?;
     Ok(())
 }
 
 fn copy_executable(src: &Path, dst: &Path) -> Result<()> {
-    std::fs::copy(src, dst)?;
+    fs::copy(src, dst)?;
     set_executable(dst)?;
     Ok(())
 }
 
 fn set_executable(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    let mut perms = std::fs::metadata(path)?.permissions();
+    let mut perms = fs::metadata(path)?.permissions();
     perms.set_mode(0o755);
-    std::fs::set_permissions(path, perms)?;
+    fs::set_permissions(path, perms)?;
     Ok(())
 }
 
 fn mkfs_erofs_block_flag() -> String {
     format!("-b{EROFS_BLOCK_SIZE}")
-}
-
-fn humanize_size(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = 1024 * KB;
-    if bytes >= MB {
-        format!("{:.1}M", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.1}K", bytes as f64 / KB as f64)
-    } else {
-        format!("{bytes}B")
-    }
 }
 
 #[cfg(test)]

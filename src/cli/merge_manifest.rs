@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::Args;
 
-use crate::release::merge_manifests;
+use crate::build::release::merge_manifests;
 use arcbox_boot::manifest::Manifest;
 
 #[derive(Args)]

@@ -1,7 +1,8 @@
 use std::path::{Path, PathBuf};
 
 use crate::download::{
-    PreparePhase, PrepareProgress, ProgressCallback, current_arch, download_and_verify, sha256_file,
+    PreparePhase, PrepareProgress, ProgressCallback, cdn_url, current_arch, download_and_verify,
+    sha256_file,
 };
 use crate::error::{Error, Result};
 use crate::manifest::{Manifest, schema_version_for};
@@ -181,11 +182,10 @@ impl AssetManager {
         }
 
         // Download from CDN (no pre-known checksum; validated via schema after parsing).
-        let url = format!(
-            "{}/asset/v{}/manifest.json",
-            self.config.cdn_base_url.trim_end_matches('/'),
-            self.config.version
-        );
+        let url = cdn_url(
+            &self.config.cdn_base_url,
+            &format!("asset/v{}/manifest.json", self.config.version),
+        )?;
         self.download_raw(&url, &manifest_path).await?;
 
         self.load_cached_manifest(version_dir).await
@@ -225,11 +225,7 @@ impl AssetManager {
             return Ok(());
         }
 
-        let url = format!(
-            "{}/{}",
-            self.config.cdn_base_url.trim_end_matches('/'),
-            relative_path
-        );
+        let url = cdn_url(&self.config.cdn_base_url, relative_path)?;
 
         download_and_verify(&url, dest, expected_sha256, name, |dl, tot| {
             if let Some(cb) = progress {

@@ -159,7 +159,7 @@ jobs:
 
       - name: Build EROFS rootfs
         run: |
-          ./target/release/boot-assets build-rootfs \
+          ./target/release/boot-assets build rootfs \
             --output "$PWD/build/rootfs.erofs" \
             --arch ${{ matrix.arch }}
 
@@ -173,7 +173,7 @@ jobs:
   # ==========================================================================
   # Stage 1c: Build FEX runtime from source on ARM64.
   # ==========================================================================
-  build-fex-runtime:
+  build-fex:
     name: Build FEX Runtime
     needs: resolve-vars
     runs-on: ubuntu-24.04-arm
@@ -211,7 +211,7 @@ jobs:
       - name: Build FEX runtime bundle
         run: |
           SOURCE_REF="FEX-2605"
-          ./target/release/boot-assets build-fex-runtime \
+          ./target/release/boot-assets build fex \
             --source-ref "$SOURCE_REF" \
             --version "${SOURCE_REF}-${{ needs.resolve-vars.outputs.version }}" \
             --output "$PWD/dist/bin" \
@@ -229,7 +229,7 @@ jobs:
   # ==========================================================================
   assemble:
     name: Assemble (${{ matrix.arch }})
-    needs: [resolve-vars, download-kernel, build-rootfs, build-fex-runtime]
+    needs: [resolve-vars, download-kernel, build-rootfs, build-fex]
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -298,7 +298,7 @@ jobs:
 
       - name: Assemble release
         run: |
-          ./target/release/boot-assets build-release \
+          ./target/release/boot-assets build release \
             --version "${{ needs.resolve-vars.outputs.version }}" \
             --kernel "$PWD/staging/kernel-${{ matrix.arch }}" \
             --rootfs "$PWD/staging/rootfs.erofs" \

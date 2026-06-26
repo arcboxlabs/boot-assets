@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::Args;
 
-use crate::release::{BuildReleaseOpts, build_release};
+use crate::build::release::{build_release, BuildReleaseOpts};
 
 #[derive(Args)]
 pub struct BuildReleaseArgs {

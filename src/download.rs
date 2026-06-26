@@ -3,6 +3,7 @@ use std::path::Path;
 use futures_util::StreamExt;
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
+use url::Url;
 
 use crate::error::{Error, Result};
 use crate::manifest::{Binary, BinaryTarget, Manifest};
@@ -39,6 +40,18 @@ pub type ProgressCallback = Box<dyn Fn(PrepareProgress) + Send + Sync>;
 
 const HTTP_TIMEOUT_SECS: u64 = 300;
 const USER_AGENT: &str = "arcbox-boot-assets/0.1";
+
+pub(crate) fn cdn_url(base: &str, path: &str) -> Result<String> {
+    let mut base = base.to_string();
+    if !base.ends_with('/') {
+        base.push('/');
+    }
+    Url::parse(&base)
+        .map_err(|e| Error::InvalidConfig(format!("invalid CDN base URL '{base}': {e}")))?
+        .join(path)
+        .map(|url| url.to_string())
+        .map_err(|e| Error::InvalidConfig(format!("invalid CDN path '{path}': {e}")))
+}
 
 impl Manifest {
     /// Returns the target entry for the current host architecture, if present.
@@ -106,7 +119,7 @@ impl Manifest {
             }
 
             // All manifest paths are relative to cdn_base_url.
-            let url = format!("{}/{}", cdn_base_url.trim_end_matches('/'), bt.path);
+            let url = cdn_url(cdn_base_url, &bt.path)?;
 
             download_and_verify(&url, &dest_path, &bt.sha256, &binary.name, |dl, tot| {
                 pg(PreparePhase::Downloading {

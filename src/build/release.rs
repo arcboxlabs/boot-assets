@@ -2,9 +2,11 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use fs_err as fs;
+use humansize::{BINARY, format_size};
 use sha2::{Digest, Sha256};
 
-use crate::rootfs::{BuildRootfsOpts, build_rootfs};
+use crate::build::rootfs::{build_rootfs, BuildRootfsOpts};
 use arcbox_boot::manifest::{Binary, FileEntry, Manifest, Target, schema_version_for};
 
 #[derive(Debug, Clone)]
@@ -31,7 +33,7 @@ pub fn build_release(opts: &BuildReleaseOpts) -> Result<()> {
 
     let work_dir = tempfile::tempdir().context("failed to create work dir")?;
     let work = work_dir.path();
-    std::fs::create_dir_all(&opts.output_dir)?;
+    fs::create_dir_all(&opts.output_dir)?;
 
     // Step 1: Build or copy EROFS rootfs.
     let rootfs_work = work.join("rootfs.erofs");
@@ -43,7 +45,7 @@ pub fn build_release(opts: &BuildReleaseOpts) -> Result<()> {
             "==> Using pre-built rootfs.erofs: {}",
             rootfs_path.display()
         );
-        std::fs::copy(rootfs_path, &rootfs_work)?;
+        fs::copy(rootfs_path, &rootfs_work)?;
     } else {
         println!("==> Building EROFS rootfs");
         build_rootfs(&BuildRootfsOpts {
@@ -56,7 +58,7 @@ pub fn build_release(opts: &BuildReleaseOpts) -> Result<()> {
     // Step 2: Copy kernel.
     println!("==> Copying kernel");
     let kernel_work = work.join("kernel");
-    std::fs::copy(&opts.kernel_path, &kernel_work)?;
+    fs::copy(&opts.kernel_path, &kernel_work)?;
 
     // Step 3: Generate manifest.
     let kernel_sha256 = sha256_file(&kernel_work)?;
@@ -102,7 +104,7 @@ pub fn build_release(opts: &BuildReleaseOpts) -> Result<()> {
     println!("==> Generating manifest.json (schema v{schema_version})");
     let manifest_json = serde_json::to_string_pretty(&manifest)?;
     let manifest_work = work.join("manifest.json");
-    std::fs::write(&manifest_work, &manifest_json)?;
+    fs::write(&manifest_work, &manifest_json)?;
 
     // Step 4: Package tarball.
     let tarball_name = format!("boot-assets-{}-v{}.tar.gz", opts.arch, opts.version);
@@ -117,17 +119,17 @@ pub fn build_release(opts: &BuildReleaseOpts) -> Result<()> {
 
     // Write checksum.
     let tarball_sha = sha256_file(&tarball_path)?;
-    std::fs::write(
+    fs::write(
         opts.output_dir.join(format!("{tarball_name}.sha256")),
         format!("{tarball_sha}  {tarball_name}\n"),
     )?;
 
     // Copy manifest to output dir.
-    std::fs::write(opts.output_dir.join("manifest.json"), &manifest_json)?;
+    fs::write(opts.output_dir.join("manifest.json"), &manifest_json)?;
 
-    let tarball_size = humanize_size(std::fs::metadata(&tarball_path)?.len());
-    let kernel_size = humanize_size(std::fs::metadata(&kernel_work)?.len());
-    let rootfs_size = humanize_size(std::fs::metadata(&rootfs_work)?.len());
+    let tarball_size = format_size(fs::metadata(&tarball_path)?.len(), BINARY);
+    let kernel_size = format_size(fs::metadata(&kernel_work)?.len(), BINARY);
+    let rootfs_size = format_size(fs::metadata(&rootfs_work)?.len(), BINARY);
 
     println!();
     println!("========================================");
@@ -185,13 +187,12 @@ pub fn merge_manifests(base: &mut Manifest, other: &Manifest) -> Result<()> {
 }
 
 fn sha256_file(path: &Path) -> Result<String> {
-    let bytes =
-        std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
     Ok(format!("{:x}", Sha256::digest(&bytes)))
 }
 
 fn create_tarball(output: &Path, work_dir: &Path, files: &[&str]) -> Result<()> {
-    let file = std::fs::File::create(output)?;
+    let file = fs::File::create(output)?;
     let gz = flate2::write::GzEncoder::new(file, flate2::Compression::default());
     let mut ar = tar::Builder::new(gz);
     for name in files {
@@ -207,20 +208,7 @@ fn load_binaries_json(path: &Option<PathBuf>) -> Result<Vec<Binary>> {
     let Some(path) = path else {
         return Ok(Vec::new());
     };
-    let bytes =
-        std::fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
     serde_json::from_slice(&bytes)
         .with_context(|| format!("failed to parse binaries JSON from {}", path.display()))
-}
-
-fn humanize_size(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = 1024 * KB;
-    if bytes >= MB {
-        format!("{:.1}M", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.1}K", bytes as f64 / KB as f64)
-    } else {
-        format!("{bytes}B")
-    }
 }

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::Args;
 
-use crate::rootfs::{BuildRootfsOpts, build_rootfs};
+use crate::build::rootfs::{build_rootfs, BuildRootfsOpts};
 
 #[derive(Args)]
 pub struct BuildRootfsArgs {
