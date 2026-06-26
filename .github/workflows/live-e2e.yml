@@ -1,6 +1,12 @@
 name: Live E2E
 
 on:
+  pull_request:
+    branches:
+      - master
+  push:
+    branches:
+      - master
   workflow_dispatch:
     inputs:
       version:
@@ -59,21 +65,21 @@ jobs:
       - name: Live E2E against published artifacts
         run: cargo test --features download --no-default-features --test e2e live::live_published_boot_assets_are_consumable -- --ignored --nocapture
         env:
-          BOOT_ASSETS_LIVE_CDN_BASE_URL: ${{ inputs.cdn_base_url }}
+          BOOT_ASSETS_LIVE_CDN_BASE_URL: ${{ inputs.cdn_base_url || 'https://boot.arcboxcdn.com' }}
           BOOT_ASSETS_LIVE_VERSION: ${{ inputs.version }}
-          BOOT_ASSETS_LIVE_ARCH: ${{ inputs.arch }}
-          BOOT_ASSETS_LIVE_PREPARE_BINARIES: ${{ inputs.prepare_binaries }}
+          BOOT_ASSETS_LIVE_ARCH: ${{ inputs.arch || 'x86_64' }}
+          BOOT_ASSETS_LIVE_PREPARE_BINARIES: ${{ github.event_name == 'workflow_dispatch' && inputs.prepare_binaries == false && 'false' || 'true' }}
 
       - name: Install QEMU
-        if: ${{ inputs.boot_linux && inputs.arch == 'x86_64' }}
+        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.boot_linux) && (inputs.arch == '' || inputs.arch == 'x86_64') }}
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends qemu-system-x86
 
       - name: Boot published Linux under QEMU
-        if: ${{ inputs.boot_linux && inputs.arch == 'x86_64' }}
+        if: ${{ (github.event_name != 'workflow_dispatch' || inputs.boot_linux) && (inputs.arch == '' || inputs.arch == 'x86_64') }}
         run: cargo test --features download --no-default-features --test e2e boot::qemu_boots_x86_64_linux -- --ignored --nocapture
         env:
-          BOOT_ASSETS_LIVE_CDN_BASE_URL: ${{ inputs.cdn_base_url }}
+          BOOT_ASSETS_LIVE_CDN_BASE_URL: ${{ inputs.cdn_base_url || 'https://boot.arcboxcdn.com' }}
           BOOT_ASSETS_LIVE_VERSION: ${{ inputs.version }}
-          BOOT_ASSETS_LIVE_ARCH: ${{ inputs.arch }}
+          BOOT_ASSETS_LIVE_ARCH: ${{ inputs.arch || 'x86_64' }}
