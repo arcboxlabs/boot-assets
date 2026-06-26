@@ -87,7 +87,7 @@ pub fn sha256_file(path: &Path) -> AnyhowResult<String> {
     use sha2::{Digest, Sha256};
 
     let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
-    Ok(format!("{:x}", Sha256::digest(&bytes)))
+    Ok(hex_encode(Sha256::digest(&bytes)))
 }
 
 /// Reads and parses a JSON file with path context on failures.
@@ -126,7 +126,19 @@ pub async fn sha256_file_async(path: &Path) -> Result<String> {
     use sha2::{Digest, Sha256};
 
     let bytes = tokio::fs::read(path).await?;
-    Ok(format!("{:x}", Sha256::digest(&bytes)))
+    Ok(hex_encode(Sha256::digest(&bytes)))
+}
+
+#[cfg(any(feature = "download", feature = "build"))]
+pub(crate) fn hex_encode(bytes: impl AsRef<[u8]>) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let bytes = bytes.as_ref();
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        encoded.push(HEX[(byte >> 4) as usize] as char);
+        encoded.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    encoded
 }
 
 /// Reads and parses a JSON file using async I/O.

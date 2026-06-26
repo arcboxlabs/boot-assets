@@ -5,7 +5,7 @@ use tokio::io::AsyncWriteExt;
 
 use crate::error::{Error, Result};
 use crate::manifest::{Binary, BinaryTarget, Manifest};
-use crate::util::{cdn_url, current_arch, set_executable_async, sha256_file_async};
+use crate::util::{cdn_url, current_arch, hex_encode, set_executable_async, sha256_file_async};
 
 /// Progress information for binary preparation.
 #[derive(Debug, Clone)]
@@ -220,7 +220,7 @@ pub(crate) async fn download_and_verify(
     file.flush().await?;
     drop(file);
 
-    let actual_sha = format!("{:x}", hasher.finalize());
+    let actual_sha = hex_encode(hasher.finalize());
     if actual_sha != expected_sha256 {
         let _ = tokio::fs::remove_file(&temp_path).await;
         return Err(Error::ChecksumMismatch {
