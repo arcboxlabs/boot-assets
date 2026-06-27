@@ -69,10 +69,11 @@ fn inittab() -> String {
 ///
 /// Mounts the early pseudo-filesystems and the VirtioFS `arcbox` share, registers
 /// FEX for amd64 ELF binaries, then runs the agent's one-shot system
-/// initialization (`arcbox-agent init`: writable mounts, networking, `/etc`),
-/// which returns on completion. The rootfs and agent ship in lockstep, so the
-/// `init` subcommand is always supported; `|| true` tolerates a non-fatal init
-/// error so the supervised agent still starts and can report status.
+/// initialization (`arcbox-agent init`: writable mounts, networking, `/etc`). On
+/// success `init` exits 0 and busybox respawns the long-running agent. A non-zero
+/// exit means a critical writable layer failed to mount, so rcS powers the VM off
+/// for a clean host-driven retry instead of respawning an agent that would run
+/// broken on the read-only EROFS rootfs.
 fn rcs_script() -> Result<String> {
     render_template(
         "rcS.sh",
@@ -404,8 +405,13 @@ mod tests {
         // sysinit is one-shot: it must not exec/replace itself with the agent.
         assert!(!script.contains("exec /arcbox/bin/arcbox-agent"));
         // No busybox `timeout` wrapper: its arg syntax is version-dependent and a
-        // misparse would be silently swallowed by `|| true`, skipping init.
+        // misparse would be silently swallowed, skipping init.
         assert!(!script.contains("timeout"));
+        // A non-zero init exit (critical mount failure) powers off for a clean
+        // host-driven retry rather than swallowing the error and respawning a
+        // broken agent.
+        assert!(script.contains("poweroff -f"));
+        assert!(!script.contains("init || true"));
         assert!(!script.contains("export FEX_ROOTFS"));
         assert!(!script.contains('\0'));
     }

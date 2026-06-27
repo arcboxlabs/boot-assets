@@ -24,7 +24,14 @@ if [ -x {{ FEX_BINARY }} ]; then
   fi
 fi
 
-# One-shot guest system init (mounts, networking, /etc). Returns on completion;
-# busybox init then respawns the long-running agent via the inittab entry.
-# `|| true` keeps a non-fatal init error from aborting sysinit.
-{{ AGENT_BIN }} init || true
+# One-shot guest system init (mounts, networking, /etc). On success `init` exits
+# 0 and busybox init respawns the long-running agent via the inittab entry. A
+# non-zero exit means a critical writable layer (/etc, /run, /var, /tmp) failed to
+# mount, so the agent would run broken on the read-only EROFS rootfs — power off
+# (force: bypass init, which is blocked waiting on this sysinit) with a clear
+# console message so the host relaunches into a fresh boot instead of respawning
+# a broken agent.
+if ! {{ AGENT_BIN }} init; then
+  /bin/busybox printf 'arcbox: guest system init failed; powering off for a clean retry (see /arcbox/log/agent.log)\n' > /dev/console 2>/dev/null || true
+  /bin/busybox poweroff -f
+fi
