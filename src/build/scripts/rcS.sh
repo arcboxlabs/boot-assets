@@ -2,6 +2,18 @@
 /bin/busybox mount -t proc proc /proc
 /bin/busybox mount -t sysfs sysfs /sys
 /bin/busybox mount -t devtmpfs devtmpfs /dev
+
+# Interactive debug console (opt-in via `arcbox.debug_console` on the kernel
+# cmdline; the host wires the matching virtio-console socket). Spawn a root
+# shell on the console BEFORE the blocking virtiofs mount below, so an operator
+# can diagnose early-boot hangs that occur before the agent ever runs (the
+# dominant HV cold-boot failure mode). Backgrounded in its own session so rcS
+# continues into the normal boot; inert unless the cmdline opts in.
+if /bin/busybox grep -q arcbox.debug_console /proc/cmdline; then
+  /bin/busybox printf 'arcbox: debug console enabled, spawning shell on /dev/hvc0\n' > /dev/console 2>/dev/null || true
+  /bin/busybox setsid /bin/busybox sh </dev/hvc0 >/dev/hvc0 2>&1 &
+fi
+
 /bin/busybox mkdir -p /arcbox
 /bin/busybox mount -t virtiofs arcbox /arcbox
 
