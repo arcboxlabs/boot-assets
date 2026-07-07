@@ -88,27 +88,27 @@ url = "https://github.com/k3s-io/k3s/releases/download/v1.34.3%2Bk3s1/k3s"
 
 [[binaries]]
 name = "firecracker"
-version = "1.10.1"
+version = "1.16.1"
 
 [binaries.source.arm64]
-url = "https://github.com/firecracker-microvm/firecracker/releases/download/v1.10.1/firecracker-v1.10.1-aarch64.tgz"
-extract = "release-v1.10.1-aarch64/firecracker-v1.10.1-aarch64"
+url = "https://github.com/firecracker-microvm/firecracker/releases/download/v1.16.1/firecracker-v1.16.1-aarch64.tgz"
+extract = "release-v1.16.1-aarch64/firecracker-v1.16.1-aarch64"
 
 [binaries.source.x86_64]
-url = "https://github.com/firecracker-microvm/firecracker/releases/download/v1.10.1/firecracker-v1.10.1-x86_64.tgz"
-extract = "release-v1.10.1-x86_64/firecracker-v1.10.1-x86_64"
+url = "https://github.com/firecracker-microvm/firecracker/releases/download/v1.16.1/firecracker-v1.16.1-x86_64.tgz"
+extract = "release-v1.16.1-x86_64/firecracker-v1.16.1-x86_64"
 
 [[binaries]]
 name = "jailer"
-version = "1.10.1"
+version = "1.16.1"
 
 [binaries.source.arm64]
-url = "https://github.com/firecracker-microvm/firecracker/releases/download/v1.10.1/firecracker-v1.10.1-aarch64.tgz"
-extract = "release-v1.10.1-aarch64/jailer-v1.10.1-aarch64"
+url = "https://github.com/firecracker-microvm/firecracker/releases/download/v1.16.1/firecracker-v1.16.1-aarch64.tgz"
+extract = "release-v1.16.1-aarch64/jailer-v1.16.1-aarch64"
 
 [binaries.source.x86_64]
-url = "https://github.com/firecracker-microvm/firecracker/releases/download/v1.10.1/firecracker-v1.10.1-x86_64.tgz"
-extract = "release-v1.10.1-x86_64/jailer-v1.10.1-x86_64"
+url = "https://github.com/firecracker-microvm/firecracker/releases/download/v1.16.1/firecracker-v1.16.1-x86_64.tgz"
+extract = "release-v1.16.1-x86_64/jailer-v1.16.1-x86_64"
 
 # --- Guest kernel image (for Firecracker microVMs) ---
 # Placed at /arcbox/kernel/vmlinux inside the guest VM.
