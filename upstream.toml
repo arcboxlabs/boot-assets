@@ -115,13 +115,13 @@ extract = "release-v1.16.1-x86_64/jailer-v1.16.1-x86_64"
 
 [[binaries]]
 name = "vmlinux"
-version = "6.1.102"
+version = "6.1.155"
 install_dir = "kernel"
 
 [binaries.source.arm64]
 format = "binary"
-url = "https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.10/aarch64/vmlinux-6.1.102"
+url = "https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.14/aarch64/vmlinux-6.1.155"
 
 [binaries.source.x86_64]
 format = "binary"
-url = "https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.10/x86_64/vmlinux-6.1.102"
+url = "https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.14/x86_64/vmlinux-6.1.155"
