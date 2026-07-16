@@ -74,15 +74,15 @@ extract = "docker/docker-init"
 
 [[binaries]]
 name = "k3s"
-version = "v1.34.3+k3s1"
+version = "v1.36.2+k3s1"
 
 [binaries.source.arm64]
 format = "binary"
-url = "https://github.com/k3s-io/k3s/releases/download/v1.34.3%2Bk3s1/k3s-arm64"
+url = "https://github.com/k3s-io/k3s/releases/download/v1.36.2%2Bk3s1/k3s-arm64"
 
 [binaries.source.x86_64]
 format = "binary"
-url = "https://github.com/k3s-io/k3s/releases/download/v1.34.3%2Bk3s1/k3s"
+url = "https://github.com/k3s-io/k3s/releases/download/v1.36.2%2Bk3s1/k3s"
 
 # --- Firecracker VMM + jailer (from same release tarball) ---
 
