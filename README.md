@@ -170,7 +170,7 @@ Pipeline stages:
 2. **Build EROFS rootfs** — creates minimal rootfs from Alpine static binaries (per-arch)
 3. **Assemble** — packages kernel + rootfs.erofs + manifest.json into tarball (per-arch)
 4. **Merge** — merges per-arch manifests into unified multi-target manifest
-5. **Release** — publishes to GitHub Releases and Cloudflare R2
+5. **Release** — publishes to GitHub Releases and Backblaze B2 (fronted by Cloudflare at boot.arcboxcdn.com)
 
 ### Local build
 
