@@ -22,7 +22,12 @@ const IPTABLES_SYMLINKS: &[&str] = &[
 ];
 
 /// Core statically-linked binaries built from source inside Docker.
-const CORE_STATIC_BINARIES: &[&str] = &["busybox", "mkfs.btrfs", "iptables"];
+///
+/// `mkfs.erofs` is a runtime dependency of containerd's erofs snapshotter
+/// (its differ converts layer tars into EROFS blobs); the Alpine package is
+/// too old (containerd prefers erofs-utils >= 1.8.2), so it is built from
+/// source like the other core tools.
+const CORE_STATIC_BINARIES: &[&str] = &["busybox", "mkfs.btrfs", "iptables", "mkfs.erofs"];
 
 const K3S_HOST_UTILITIES: &[&str] = &["ebtables", "ethtool", "socat"];
 
@@ -231,7 +236,7 @@ pub fn build_rootfs(opts: &BuildRootfsOpts) -> Result<()> {
     println!("    Compression: {}", opts.compression);
     println!("    Block size: {} bytes", EROFS_BLOCK_SIZE);
     println!(
-        "    Contents: busybox + mkfs.btrfs + iptables-legacy + ebtables + ethtool + socat + nfs-utils + CA certs + busybox-init boot sequence"
+        "    Contents: busybox + mkfs.btrfs + iptables-legacy + mkfs.erofs + ebtables + ethtool + socat + nfs-utils + CA certs + busybox-init boot sequence"
     );
     println!("    Core boot tools are static; packaged utilities include required shared libs");
 
@@ -291,6 +296,7 @@ fn build_rootfs_tree(rootfs: &Path, staging: &Path) -> Result<()> {
     fs::create_dir_all(&sbin_dir)?;
     copy_executable(&staging.join("mkfs.btrfs"), &sbin_dir.join("mkfs.btrfs"))?;
     copy_executable(&staging.join("iptables"), &sbin_dir.join("iptables"))?;
+    copy_executable(&staging.join("mkfs.erofs"), &sbin_dir.join("mkfs.erofs"))?;
     for binary in K3S_HOST_UTILITIES {
         copy_executable(&staging.join(binary), &sbin_dir.join(binary))?;
     }

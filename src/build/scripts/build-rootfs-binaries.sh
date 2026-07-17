@@ -7,6 +7,7 @@ apk add --no-cache \
   zlib-dev zlib-static \
   lzo-dev \
   zstd-dev zstd-static \
+  lz4-dev lz4-static \
   busybox-static ca-certificates \
   {{ utility_packages }} \
   {{ nfs_packages }}
@@ -47,6 +48,19 @@ strip iptables/xtables-legacy-multi
 cp iptables/xtables-legacy-multi /out/iptables
 echo "[3/{{ total }}] iptables-legacy (static) OK"
 
+# 4. mkfs.erofs (static build from source; containerd's erofs snapshotter
+#    differ prefers erofs-utils >= 1.8.2, newer than the Alpine package)
+cd /tmp
+git clone --depth 1 --branch v1.9.2 https://github.com/erofs/erofs-utils.git
+cd erofs-utils
+./autogen.sh
+./configure --disable-fuse
+# libtool swallows a plain -static; -all-static is its fully-static flag.
+make LDFLAGS="-all-static" -j$(nproc)
+strip mkfs/mkfs.erofs
+cp mkfs/mkfs.erofs /out/
+echo "[4/{{ total }}] mkfs.erofs (static) OK"
+
 {{ utility_stage_script }}
 
 {{ nfs_stage_script }}
@@ -67,7 +81,7 @@ cp /etc/ssl/certs/ca-certificates.crt /out/ca-certificates.crt
 
 # Verify rootfs binaries and utility dependencies.
 echo "=== Verification ==="
-for bin in busybox mkfs.btrfs iptables; do
+for bin in busybox mkfs.btrfs iptables mkfs.erofs; do
   printf "  %-16s " "$bin"
   if ldd "/out/$bin" >/dev/null 2>&1; then
     echo "DYNAMIC (WARNING)"
