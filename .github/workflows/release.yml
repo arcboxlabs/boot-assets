@@ -405,6 +405,11 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ needs.resolve-vars.outputs.version }}
+          # Pin the created tag to the commit this run built from; without
+          # this a workflow_dispatch from a non-default ref would tag the
+          # default-branch HEAD while shipping artifacts from the branch.
+          # Ignored when the tag already exists (tag-push runs).
+          target_commitish: ${{ github.sha }}
           name: Boot Assets v${{ needs.resolve-vars.outputs.version }}
           body: |
             ## Boot Assets v${{ needs.resolve-vars.outputs.version }}
