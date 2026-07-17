@@ -97,4 +97,4 @@ for bin in {{ utility_packages }} {{ nfs_binaries_list }}; do
     echo "static OK"
   fi
 done
-ls -lh /out/busybox /out/mkfs.btrfs /out/iptables {{ utility_out_paths }} {{ nfs_out_paths }}
+ls -lh /out/busybox /out/mkfs.btrfs /out/iptables /out/mkfs.erofs {{ utility_out_paths }} {{ nfs_out_paths }}
