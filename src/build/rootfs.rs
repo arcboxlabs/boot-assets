@@ -354,6 +354,15 @@ fn write_boot_sequence(rootfs: &Path) -> Result<()> {
     fs::write(etc_dir.join("inittab"), inittab())?;
     fs::write(init_d_dir.join("rcS"), rcs_script()?)?;
     set_executable(&init_d_dir.join("rcS"))?;
+
+    // Machine boot shim: PID 1 for distro machines, selected by the host via
+    // `init=/sbin/arcbox-machine-init` (see the script header for the
+    // contract). Inert on the System VM path, which boots busybox init.
+    fs::write(
+        sbin_dir.join("arcbox-machine-init"),
+        include_str!("scripts/machine-init.sh"),
+    )?;
+    set_executable(&sbin_dir.join("arcbox-machine-init"))?;
     Ok(())
 }
 
@@ -459,6 +468,24 @@ mod tests {
         assert!(body.contains("/arcbox/bin/arcbox-agent init"));
         let mode = fs::metadata(&rcs).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o755, "rcS must be executable");
+
+        // /sbin/arcbox-machine-init is executable and honors the machine
+        // cmdline contract (keys owned by arcbox's arcbox-constants).
+        let shim = root.join("sbin/arcbox-machine-init");
+        let body = fs::read_to_string(&shim).unwrap();
+        for needle in [
+            "arcbox.machine_rootfs=",
+            "arcbox.machine_rootfs_type=",
+            "arcbox.machine_data=",
+            "pivot_root",
+            "mount -t virtiofs arcbox /arcbox",
+            "/arcbox/bin/arcbox-agent machine-init",
+            "/arcbox/bin/arcbox-agent serve",
+        ] {
+            assert!(body.contains(needle), "machine-init missing: {needle}");
+        }
+        let mode = fs::metadata(&shim).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o755, "machine-init must be executable");
 
         fs::remove_dir_all(&root).ok();
     }
