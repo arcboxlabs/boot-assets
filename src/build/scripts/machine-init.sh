@@ -84,7 +84,7 @@ for tok in $($bb cat /proc/cmdline); do
   esac
 done
 if [ -n "$mounts_table" ]; then
-  $bb printf '%s' "$mounts_table" | $bb tr ',' '\n' | while read -r entry; do
+  $bb printf '%s\n' "$mounts_table" | $bb tr ',' '\n' | while read -r entry; do
     [ -n "$entry" ] || continue
     tag="${entry%%=*}"
     dest="${entry#*=}"
