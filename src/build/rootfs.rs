@@ -477,6 +477,7 @@ mod tests {
             "arcbox.machine_rootfs=",
             "arcbox.machine_rootfs_type=",
             "arcbox.machine_data=",
+            "arcbox.machine_mounts=",
             "pivot_root",
             "mount -t virtiofs arcbox /arcbox",
             "/arcbox/bin/arcbox-agent machine-init",
