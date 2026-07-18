@@ -74,18 +74,24 @@ if [ ! -e /newroot/bin/busybox ]; then
 fi
 
 # Hand the pseudo-filesystems over before anything runs inside the new root
-# (the agent needs /dev for vsock and /proc for interface discovery).
+# (the agent needs /dev for vsock and /proc for interface discovery). All
+# three are load-bearing: a machine without them fails start in obscure
+# ways, so power off cleanly instead.
+$bb mkdir -p /newroot/proc /newroot/sys /newroot/dev
 $bb mount -o move /proc /newroot/proc || fail 'move /proc failed'
-$bb mount -o move /sys /newroot/sys
-$bb mount -o move /dev /newroot/dev
+$bb mount -o move /sys /newroot/sys || fail 'move /sys failed'
+$bb mount -o move /dev /newroot/dev || fail 'move /dev failed'
 
 # One-shot machine init (DHCP, resolver fallback) — non-fatal: a machine
 # without networking is still reachable over vsock for diagnosis. Then the
 # long-running agent; it survives the pivot (its root fd already points into
-# the overlay) and is reparented to the distro init.
+# the overlay) and is reparented to the distro init. Redirections must name
+# the moved /dev: the shell opens them before chroot, and the old root's
+# /dev is gone.
 $bb chroot /newroot /arcbox/bin/arcbox-agent machine-init \
   || $bb printf 'arcbox-machine-init: machine-init failed; continuing\n' > /newroot/dev/console 2>/dev/null || true
-$bb chroot /newroot /arcbox/bin/arcbox-agent serve </dev/null >/dev/null 2>&1 &
+# shellcheck disable=SC2094 # /dev/null is a device node, not a regular file
+$bb chroot /newroot /arcbox/bin/arcbox-agent serve </newroot/dev/null >/newroot/dev/null 2>&1 &
 
 # Make the overlay the real root and the distro init PID 1. The old EROFS
 # root lands on /mnt and is lazily detached.
