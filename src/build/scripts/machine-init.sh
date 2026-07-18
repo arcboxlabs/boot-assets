@@ -73,6 +73,33 @@ if [ ! -e /newroot/bin/busybox ]; then
   $bb cp /bin/busybox /newroot/bin/busybox
 fi
 
+# User mounts: replay the arcbox.machine_mounts= table (comma-separated
+# tag=guest_path[:ro] entries) as virtiofs mounts inside the new root. A
+# failed mount degrades that share only — the machine still boots and the
+# host can inspect the failure over exec.
+mounts_table=
+for tok in $($bb cat /proc/cmdline); do
+  case "$tok" in
+    arcbox.machine_mounts=*) mounts_table="${tok#arcbox.machine_mounts=}" ;;
+  esac
+done
+if [ -n "$mounts_table" ]; then
+  $bb printf '%s\n' "$mounts_table" | $bb tr ',' '\n' | while read -r entry; do
+    [ -n "$entry" ] || continue
+    tag="${entry%%=*}"
+    dest="${entry#*=}"
+    opts=
+    case "$dest" in
+      *:ro) dest="${dest%:ro}"; opts='-o ro' ;;
+    esac
+    $bb mkdir -p "/newroot$dest"
+    # shellcheck disable=SC2086 # $opts is intentionally word-split
+    if ! $bb mount -t virtiofs $opts "$tag" "/newroot$dest"; then
+      $bb printf 'arcbox-machine-init: mount %s -> %s failed; continuing\n' "$tag" "$dest" > /dev/console 2>/dev/null || true
+    fi
+  done
+fi
+
 # Hand the pseudo-filesystems over before anything runs inside the new root
 # (the agent needs /dev for vsock and /proc for interface discovery). All
 # three are load-bearing: a machine without them fails start in obscure
