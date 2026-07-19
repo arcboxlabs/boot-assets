@@ -29,8 +29,6 @@ const IPTABLES_SYMLINKS: &[&str] = &[
 /// source like the other core tools.
 const CORE_STATIC_BINARIES: &[&str] = &["busybox", "mkfs.btrfs", "iptables", "mkfs.erofs"];
 
-const K3S_HOST_UTILITIES: &[&str] = &["ebtables", "ethtool", "socat"];
-
 /// NFS server utilities (Alpine `nfs-utils` package).
 const NFS_PACKAGES: &[&str] = &["nfs-utils"];
 const NFS_BINARIES: &[&str] = &["rpc.nfsd", "exportfs", "rpc.mountd"];
@@ -91,39 +89,9 @@ fn rcs_script() -> Result<String> {
     )
 }
 
-fn k3s_host_utilities_apk_packages() -> String {
-    K3S_HOST_UTILITIES.join(" ")
-}
-
 /// Total number of binary build steps.
 fn total_build_steps() -> usize {
-    CORE_STATIC_BINARIES.len() + K3S_HOST_UTILITIES.len() + NFS_BINARIES.len()
-}
-
-fn k3s_host_utilities_stage_script() -> Result<String> {
-    let start_index = CORE_STATIC_BINARIES.len() + 1;
-    let end_index = start_index + K3S_HOST_UTILITIES.len() - 1;
-    let total = total_build_steps();
-    let case_arms = indexed_case_arms(K3S_HOST_UTILITIES, start_index);
-    render_template(
-        "stage-k3s-utilities.sh",
-        include_str!("scripts/stage-k3s-utilities.sh"),
-        context! {
-            start_index,
-            end_index,
-            utility_packages => k3s_host_utilities_apk_packages(),
-            case_arms,
-            total,
-        },
-    )
-}
-
-fn k3s_host_utilities_out_paths() -> String {
-    K3S_HOST_UTILITIES
-        .iter()
-        .map(|binary| format!("/out/{binary}"))
-        .collect::<Vec<_>>()
-        .join(" ")
+    CORE_STATIC_BINARIES.len() + NFS_BINARIES.len()
 }
 
 fn nfs_apk_packages() -> String {
@@ -131,7 +99,7 @@ fn nfs_apk_packages() -> String {
 }
 
 fn nfs_stage_script() -> Result<String> {
-    let start_index = CORE_STATIC_BINARIES.len() + K3S_HOST_UTILITIES.len() + 1;
+    let start_index = CORE_STATIC_BINARIES.len() + 1;
     let end_index = start_index + NFS_BINARIES.len() - 1;
     let total = total_build_steps();
     let case_arms = indexed_case_arms(NFS_BINARIES, start_index);
@@ -181,9 +149,6 @@ pub fn build_rootfs(opts: &BuildRootfsOpts) -> Result<()> {
     let sh = Shell::new()?;
     let staging = tempfile::tempdir().context("failed to create temp dir")?;
     let staging_path = staging.path();
-    let utility_packages = k3s_host_utilities_apk_packages();
-    let utility_stage_script = k3s_host_utilities_stage_script()?;
-    let utility_out_paths = k3s_host_utilities_out_paths();
     let nfs_packages = nfs_apk_packages();
     let nfs_stage_script = nfs_stage_script()?;
     let nfs_out_paths = nfs_out_paths();
@@ -196,12 +161,9 @@ pub fn build_rootfs(opts: &BuildRootfsOpts) -> Result<()> {
         "build-rootfs-binaries.sh",
         include_str!("scripts/build-rootfs-binaries.sh"),
         context! {
-            utility_packages,
             nfs_packages,
             total,
-            utility_stage_script,
             nfs_stage_script,
-            utility_out_paths,
             nfs_out_paths,
             nfs_binaries_list,
         },
@@ -236,7 +198,7 @@ pub fn build_rootfs(opts: &BuildRootfsOpts) -> Result<()> {
     println!("    Compression: {}", opts.compression);
     println!("    Block size: {} bytes", EROFS_BLOCK_SIZE);
     println!(
-        "    Contents: busybox + mkfs.btrfs + iptables-legacy + mkfs.erofs + ebtables + ethtool + socat + nfs-utils + CA certs + busybox-init boot sequence"
+        "    Contents: busybox + mkfs.btrfs + iptables-legacy + mkfs.erofs + nfs-utils + CA certs + busybox-init boot sequence"
     );
     println!("    Core boot tools are static; packaged utilities include required shared libs");
 
@@ -297,9 +259,6 @@ fn build_rootfs_tree(rootfs: &Path, staging: &Path) -> Result<()> {
     copy_executable(&staging.join("mkfs.btrfs"), &sbin_dir.join("mkfs.btrfs"))?;
     copy_executable(&staging.join("iptables"), &sbin_dir.join("iptables"))?;
     copy_executable(&staging.join("mkfs.erofs"), &sbin_dir.join("mkfs.erofs"))?;
-    for binary in K3S_HOST_UTILITIES {
-        copy_executable(&staging.join(binary), &sbin_dir.join(binary))?;
-    }
     for binary in NFS_BINARIES {
         copy_executable(&staging.join(binary), &sbin_dir.join(binary))?;
     }
