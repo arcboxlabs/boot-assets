@@ -18,7 +18,7 @@ echo "[1/{{ total }}] busybox (static) OK"
 # 2. mkfs.btrfs (static build from source; tag tarball + retries — a git
 # clone cannot resume or retry after a mid-transfer reset)
 cd /tmp
-curl -sL --retry 8 --retry-all-errors -o btrfs-progs.tar.gz \
+curl -sfL --retry 8 --retry-all-errors -o btrfs-progs.tar.gz \
   https://github.com/kdave/btrfs-progs/archive/refs/tags/v7.1.tar.gz
 tar -xzf btrfs-progs.tar.gz
 cd btrfs-progs-7.1
@@ -34,7 +34,7 @@ echo "[2/{{ total }}] mkfs.btrfs (static) OK"
 
 # 3. iptables-legacy (static build from source)
 cd /tmp
-curl -sL --retry 8 --retry-all-errors -O https://www.netfilter.org/projects/iptables/files/iptables-1.8.13.tar.xz
+curl -sfL --retry 8 --retry-all-errors -O https://www.netfilter.org/projects/iptables/files/iptables-1.8.13.tar.xz
 tar -xf iptables-1.8.13.tar.xz
 cd iptables-1.8.13
 # Fix musl header conflict: linux/if_ether.h and netinet/if_ether.h
@@ -53,7 +53,7 @@ echo "[3/{{ total }}] iptables-legacy (static) OK"
 # 4. mkfs.erofs (static build from source; containerd's erofs snapshotter
 #    differ prefers erofs-utils >= 1.8.2, newer than the Alpine package)
 cd /tmp
-curl -sL --retry 8 --retry-all-errors -o erofs-utils.tar.gz \
+curl -sfL --retry 8 --retry-all-errors -o erofs-utils.tar.gz \
   https://github.com/erofs/erofs-utils/archive/refs/tags/v1.9.2.tar.gz
 tar -xzf erofs-utils.tar.gz
 cd erofs-utils-1.9.2
