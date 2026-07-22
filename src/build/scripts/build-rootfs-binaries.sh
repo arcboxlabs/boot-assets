@@ -108,10 +108,13 @@ cp /etc/ssl/certs/ca-certificates.crt /out/ca-certificates.crt
 
 # Verify rootfs binaries and utility dependencies.
 echo "=== Verification ==="
+# Core binaries must be static — no shared libs are staged for them, so a
+# dynamic one would pass the build and fail in the guest with exit 127.
 for bin in busybox mkfs.btrfs iptables mkfs.erofs mkfs.ext4 e2fsck; do
   printf "  %-16s " "$bin"
   if ldd "/out/$bin" >/dev/null 2>&1; then
-    echo "DYNAMIC (WARNING)"
+    echo "DYNAMIC (ERROR)"
+    exit 1
   else
     echo "static OK"
   fi
