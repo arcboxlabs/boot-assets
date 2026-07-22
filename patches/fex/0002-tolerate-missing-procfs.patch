@@ -1,0 +1,83 @@
+Subject: [PATCH] Utils/Allocator: tolerate missing procfs instead of spinning
+
+BuildKit's architecture probe (util/archutil, run by dockerd on every
+ListWorkers/build) executes the guest binary chroot'd into an empty temp
+dir: no /proc, no /dev, nothing but the probe ELF. Under the binfmt_misc
+registration that lands FEX in three release-mode defects that compound
+into an infinite loop:
+
+1. StealMemoryRegion's open("/proc/self/maps") fails, but the failure
+   assert (LogMan::Throw::AFmt) is a no-op in release builds, so the dead
+   fd (-1) flows into CollectMemoryGaps.
+2. CollectMemoryGaps' EOF check compares the ssize_t read() result against
+   `sizeof(Buffer) - PendingBytes`: -1 promotes to SIZE_MAX, the EOF path
+   never triggers, and the loop keeps issuing read(-1) with drifting
+   negative offsets forever (state R, one core pegged).
+3. The probe process never exits; buildkit has no timeout and caches the
+   probe under a sync.Once, wedging dockerd's whole BuildKit Control API
+   (every `docker build`/`buildx` call hangs silently). ArcBox ABX-494.
+
+Fix, in layers: make the EOF check signed, retry EINTR, and treat hard
+read errors as EOF (kills the spin class); return an empty region list
+when procfs is absent; and have Setup48BitAllocatorIfExists skip allocator
+creation in that case — the same degraded configuration as a sub-48-bit-VA
+host — so the probe runs the guest binary and exits normally.
+
+diff --git a/FEXCore/Source/Utils/Allocator.cpp b/FEXCore/Source/Utils/Allocator.cpp
+index 3d9944a..6519149 100644
+--- a/FEXCore/Source/Utils/Allocator.cpp
++++ b/FEXCore/Source/Utils/Allocator.cpp
+@@ -179,12 +179,22 @@ fextl::vector<MemoryRegion> CollectMemoryGaps(uintptr_t Begin, uintptr_t End, in
+       auto PendingBytes = Remaining;
+       do {
+         Remaining = read(MapsFD, Buffer + PendingBytes, sizeof(Buffer) - PendingBytes);
+-      } while (Remaining == -1 && errno == EAGAIN);
+-
+-      if (Remaining < sizeof(Buffer) - PendingBytes) {
++        // Retry a delivered signal (EINTR) as well as EAGAIN: a bare -1 falls
++        // through to the EOF clamp below, so ending the loop on EINTR would
++        // parse a partial /proc/self/maps snapshot. Only a hard error or a
++        // genuine short read should end the scan.
++      } while (Remaining == -1 && (errno == EAGAIN || errno == EINTR));
++
++      // Signed comparison: a failed read returns -1, and letting it promote
++      // to size_t would skip the EOF path and spin on the dead fd forever.
++      if (Remaining < static_cast<ssize_t>(sizeof(Buffer)) - PendingBytes) {
+         EndOfFileReached = true;
+       }
+
++      // Treat hard read errors as EOF: parse whatever was buffered, never
++      // walk the cursor backwards through negative byte counts.
++      Remaining = std::max<ssize_t>(Remaining, 0);
++
+       Remaining += PendingBytes;
+
+       Cursor = Buffer;
+@@ -228,6 +238,13 @@ fextl::vector<MemoryRegion> StealMemoryRegion(uintptr_t Begin, uintptr_t End) {
+
+   const int MapsFD = open("/proc/self/maps", O_RDONLY);
+   LogMan::Throw::AFmt(MapsFD != -1, "Failed to open /proc/self/maps");
++  if (MapsFD == -1) {
++    // procfs is unavailable (e.g. exec'd inside a bare chroot sandbox such
++    // as BuildKit's architecture probe). The memory map is unknowable, so
++    // there is nothing safe to steal — release builds must degrade instead
++    // of dereferencing a dead fd.
++    return {};
++  }
+
+   auto Regions = CollectMemoryGaps(Begin, End, MapsFD);
+   close(MapsFD);
+@@ -291,6 +308,13 @@ fextl::vector<MemoryRegion> Setup48BitAllocatorIfExists(size_t PageSize) {
+   uintptr_t Begin48BitVA = 0x0'8000'0000'0000ULL;
+   uintptr_t End48BitVA = 0x1'0000'0000'0000ULL;
+   auto Regions = StealMemoryRegion(Begin48BitVA, End48BitVA);
++  if (Regions.empty()) {
++    // /proc/self/maps was unreadable (bare chroot sandbox): without the map
++    // there is no region list to feed the 64-bit allocator. Run without the
++    // 48-bit reservation — the same configuration as a sub-48-bit-VA host —
++    // rather than building an allocator with nothing to allocate from.
++    return {};
++  }
+
+   Alloc64 = Alloc::OSAllocator::Create64BitAllocatorWithRegions(Regions);
+   AssignHookOverrides(PageSize);
