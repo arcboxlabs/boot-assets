@@ -65,6 +65,31 @@ strip mkfs/mkfs.erofs
 cp mkfs/mkfs.erofs /out/
 echo "[4/{{ total }}] mkfs.erofs (static) OK"
 
+# 5-6. mkfs.ext4 + e2fsck (static e2fsprogs; the arcbox ext4 metadata
+# volume is formatted/repaired guest-side). e2fsprogs ships a committed
+# ./configure — no autogen — and vendors its own libuuid/libblkid, which
+# --enable-libuuid/--enable-libblkid force so the static link never
+# depends on the Alpine util-linux packages installed for btrfs-progs.
+cd /tmp
+curl -sfL --retry 8 --retry-all-errors -o e2fsprogs.tar.gz \
+  https://github.com/tytso/e2fsprogs/archive/refs/tags/v1.47.3.tar.gz
+tar -xzf e2fsprogs.tar.gz
+cd e2fsprogs-1.47.3
+LDFLAGS="-static" ./configure \
+  --enable-libuuid --enable-libblkid \
+  --disable-nls --disable-uuidd --disable-fsck \
+  --disable-e2initrd-helper --disable-fuse2fs --disable-defrag \
+  --disable-debugfs --disable-imager --disable-resizer
+make -j$(nproc) libs
+make -j$(nproc) -C misc mke2fs
+make -j$(nproc) -C e2fsck e2fsck
+strip misc/mke2fs e2fsck/e2fsck
+# mke2fs switches to ext4 defaults when invoked as mkfs.ext4 (argv[0]).
+cp misc/mke2fs /out/mkfs.ext4
+cp e2fsck/e2fsck /out/e2fsck
+echo "[5/{{ total }}] mkfs.ext4 (static) OK"
+echo "[6/{{ total }}] e2fsck (static) OK"
+
 {{ nfs_stage_script }}
 
 # Shared libraries needed by packaged utilities.
@@ -83,7 +108,7 @@ cp /etc/ssl/certs/ca-certificates.crt /out/ca-certificates.crt
 
 # Verify rootfs binaries and utility dependencies.
 echo "=== Verification ==="
-for bin in busybox mkfs.btrfs iptables mkfs.erofs; do
+for bin in busybox mkfs.btrfs iptables mkfs.erofs mkfs.ext4 e2fsck; do
   printf "  %-16s " "$bin"
   if ldd "/out/$bin" >/dev/null 2>&1; then
     echo "DYNAMIC (WARNING)"
@@ -99,4 +124,4 @@ for bin in {{ nfs_binaries_list }}; do
     echo "static OK"
   fi
 done
-ls -lh /out/busybox /out/mkfs.btrfs /out/iptables /out/mkfs.erofs {{ nfs_out_paths }}
+ls -lh /out/busybox /out/mkfs.btrfs /out/iptables /out/mkfs.erofs /out/mkfs.ext4 /out/e2fsck {{ nfs_out_paths }}

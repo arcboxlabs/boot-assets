@@ -27,7 +27,14 @@ const IPTABLES_SYMLINKS: &[&str] = &[
 /// (its differ converts layer tars into EROFS blobs); the Alpine package is
 /// too old (containerd prefers erofs-utils >= 1.8.2), so it is built from
 /// source like the other core tools.
-const CORE_STATIC_BINARIES: &[&str] = &["busybox", "mkfs.btrfs", "iptables", "mkfs.erofs"];
+const CORE_STATIC_BINARIES: &[&str] = &[
+    "busybox",
+    "mkfs.btrfs",
+    "iptables",
+    "mkfs.erofs",
+    "mkfs.ext4",
+    "e2fsck",
+];
 
 /// NFS server utilities (Alpine `nfs-utils` package).
 const NFS_PACKAGES: &[&str] = &["nfs-utils"];
@@ -259,6 +266,8 @@ fn build_rootfs_tree(rootfs: &Path, staging: &Path) -> Result<()> {
     copy_executable(&staging.join("mkfs.btrfs"), &sbin_dir.join("mkfs.btrfs"))?;
     copy_executable(&staging.join("iptables"), &sbin_dir.join("iptables"))?;
     copy_executable(&staging.join("mkfs.erofs"), &sbin_dir.join("mkfs.erofs"))?;
+    copy_executable(&staging.join("mkfs.ext4"), &sbin_dir.join("mkfs.ext4"))?;
+    copy_executable(&staging.join("e2fsck"), &sbin_dir.join("e2fsck"))?;
     for binary in NFS_BINARIES {
         copy_executable(&staging.join(binary), &sbin_dir.join(binary))?;
     }
