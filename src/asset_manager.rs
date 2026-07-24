@@ -49,6 +49,11 @@ pub struct PreparedAssets {
     pub kernel: PathBuf,
     /// Path to the EROFS rootfs image.
     pub rootfs: PathBuf,
+    /// Path to the read-only EROFS runtime image, when the manifest ships
+    /// one ([`crate::manifest::Target::runtime`]). Attach it to the VM as a
+    /// block device so the guest execs the container runtime from
+    /// block-backed storage instead of over VirtioFS.
+    pub runtime_image: Option<PathBuf>,
     /// Kernel command line from manifest.
     pub kernel_cmdline: String,
     /// Boot asset version.
@@ -137,11 +142,31 @@ impl AssetManager {
         )
         .await?;
 
+        // Step 4: Download the runtime image when the manifest ships one.
+        // Absent on manifests published before it existed — the consumer
+        // then falls back to the VirtioFS runtime binaries.
+        let runtime_image = if let Some(ref runtime) = target.runtime {
+            let dest = version_dir.join("runtime.erofs");
+            self.ensure_file(
+                &runtime.path,
+                &runtime.sha256,
+                &dest,
+                "runtime",
+                &progress,
+                &mut verify_cache,
+            )
+            .await?;
+            Some(dest)
+        } else {
+            None
+        };
+
         verify_cache.save().await;
 
         Ok(PreparedAssets {
             kernel: kernel_path,
             rootfs: rootfs_path,
+            runtime_image,
             kernel_cmdline: target.kernel_cmdline.clone(),
             version: self.config.version.clone(),
             manifest,
