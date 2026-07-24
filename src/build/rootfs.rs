@@ -340,7 +340,7 @@ fn write_boot_sequence(rootfs: &Path) -> Result<()> {
     Ok(())
 }
 
-fn mkfs_erofs_block_flag() -> String {
+pub(crate) fn mkfs_erofs_block_flag() -> String {
     format!("-b{EROFS_BLOCK_SIZE}")
 }
 

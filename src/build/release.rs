@@ -71,6 +71,7 @@ pub fn build_release(opts: &BuildReleaseOpts) -> Result<()> {
     let kernel_sha256 = sha256_file(&kernel_work)?;
     let rootfs_sha256 = sha256_file(&rootfs_work)?;
     let built_at = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let binaries = load_binaries_json(&opts.binaries_json)?;
 
     let kernel_cmdline = match opts.arch.as_str() {
         "arm64" => "console=hvc0 root=/dev/vda ro rootfstype=erofs earlycon",
@@ -84,7 +85,13 @@ pub fn build_release(opts: &BuildReleaseOpts) -> Result<()> {
             bail!("runtime bin dir not found: {}", bin_dir.display());
         }
         let runtime_work = work.join("runtime.erofs");
-        build_runtime_image(bin_dir, &runtime_work, &opts.erofs_compression)?;
+        build_runtime_image(
+            bin_dir,
+            &binaries,
+            &opts.arch,
+            &runtime_work,
+            &opts.erofs_compression,
+        )?;
         Some(FileEntry {
             path: asset_object_path(&opts.version, &opts.arch, "runtime.erofs"),
             sha256: sha256_file(&runtime_work)?,
@@ -124,7 +131,7 @@ pub fn build_release(opts: &BuildReleaseOpts) -> Result<()> {
         source_ref: opts.source_ref.clone(),
         source_sha: opts.source_sha.clone(),
         targets,
-        binaries: load_binaries_json(&opts.binaries_json)?,
+        binaries,
     };
 
     println!("==> Generating manifest.json (schema v{schema_version})");
