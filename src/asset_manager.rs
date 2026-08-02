@@ -49,11 +49,6 @@ pub struct PreparedAssets {
     pub kernel: PathBuf,
     /// Path to the EROFS rootfs image.
     pub rootfs: PathBuf,
-    /// Path to the read-only EROFS runtime image, when the manifest ships
-    /// one ([`crate::manifest::Target::runtime`]). Attach it to the VM as a
-    /// block device so the guest execs the container runtime from
-    /// block-backed storage instead of over VirtioFS.
-    pub runtime_image: Option<PathBuf>,
     /// Kernel command line from manifest.
     pub kernel_cmdline: String,
     /// Boot asset version.
@@ -69,8 +64,17 @@ pub struct AssetManager {
 
 impl AssetManager {
     pub fn new(mut config: AssetManagerConfig) -> Result<Self> {
-        if config.version.is_empty() {
-            return Err(Error::InvalidConfig("version must not be empty".into()));
+        let valid_version = !config.version.is_empty()
+            && config.version != "."
+            && config.version != ".."
+            && config
+                .version
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'));
+        if !valid_version {
+            return Err(Error::InvalidConfig(
+                "version must contain only ASCII letters, digits, '.', '-', or '_'".into(),
+            ));
         }
         if config.arch.is_empty() {
             config.arch = current_arch().to_string();
@@ -142,31 +146,11 @@ impl AssetManager {
         )
         .await?;
 
-        // Step 4: Download the runtime image when the manifest ships one.
-        // Absent on manifests published before it existed — the consumer
-        // then falls back to the VirtioFS runtime binaries.
-        let runtime_image = if let Some(ref runtime) = target.runtime {
-            let dest = version_dir.join("runtime.erofs");
-            self.ensure_file(
-                &runtime.path,
-                &runtime.sha256,
-                &dest,
-                "runtime",
-                &progress,
-                &mut verify_cache,
-            )
-            .await?;
-            Some(dest)
-        } else {
-            None
-        };
-
         verify_cache.save().await;
 
         Ok(PreparedAssets {
             kernel: kernel_path,
             rootfs: rootfs_path,
-            runtime_image,
             kernel_cmdline: target.kernel_cmdline.clone(),
             version: self.config.version.clone(),
             manifest,
@@ -320,5 +304,37 @@ impl AssetManager {
 
         tokio::fs::rename(&temp_path, dest).await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AssetManager, AssetManagerConfig};
+
+    #[test]
+    fn version_must_be_a_safe_runtime_generation() {
+        let config = |version: &str| AssetManagerConfig {
+            version: version.to_string(),
+            ..AssetManagerConfig::default()
+        };
+
+        for valid in ["0.8.0", "release-0_8"] {
+            assert!(AssetManager::new(config(valid)).is_ok());
+        }
+        for invalid in [
+            "",
+            ".",
+            "..",
+            "../0.8.0",
+            "0.8/0",
+            "0.8.0/",
+            "0.8.0 rc1",
+            "版本-0.8.0",
+        ] {
+            assert!(
+                AssetManager::new(config(invalid)).is_err(),
+                "{invalid:?} must be rejected"
+            );
+        }
     }
 }

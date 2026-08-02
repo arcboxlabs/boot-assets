@@ -307,8 +307,7 @@ jobs:
             --source-repo "arcboxlabs/kernel" \
             --source-ref "${{ needs.resolve-vars.outputs.kernel_tag }}" \
             --output-dir "$PWD/dist" \
-            --binaries-json "$PWD/dist/binaries.json" \
-            --runtime-bin-dir "$PWD/dist/bin"
+            --binaries-json "$PWD/dist/binaries.json"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
@@ -475,11 +474,11 @@ jobs:
           VERSION="${{ needs.resolve-vars.outputs.version }}"
           STAGING="b2-staging"
 
-          # asset/v{version}/{arch}/kernel + rootfs.erofs + runtime.erofs
+          # asset/v{version}/{arch}/kernel + rootfs.erofs
           for ARCH in arm64 x86_64; do
             mkdir -p "$STAGING/asset/v${VERSION}/${ARCH}"
             TARBALL="dist/${ARCH}/boot-assets-${ARCH}-v${VERSION}.tar.gz"
-            tar -xzf "$TARBALL" -C "$STAGING/asset/v${VERSION}/${ARCH}/" kernel rootfs.erofs runtime.erofs
+            tar -xzf "$TARBALL" -C "$STAGING/asset/v${VERSION}/${ARCH}/" kernel rootfs.erofs
           done
           cp dist/manifest.json "$STAGING/asset/v${VERSION}/manifest.json"
 

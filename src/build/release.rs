@@ -6,7 +6,6 @@ use fs_err as fs;
 use humansize::{BINARY, format_size};
 
 use crate::build::rootfs::{BuildRootfsOpts, build_rootfs};
-use crate::build::runtime_image::build_runtime_image;
 use arcbox_boot::manifest::{Binary, FileEntry, Manifest, Target, schema_version_for};
 use arcbox_boot::util::{asset_object_path, create_tar_gz, read_json_file, sha256_file};
 
@@ -25,12 +24,6 @@ pub struct BuildReleaseOpts {
     /// Optional path to a JSON file containing `Vec<Binary>` entries
     /// (output of `sync-binaries`). Populates the manifest `binaries` field.
     pub binaries_json: Option<PathBuf>,
-    /// Optional directory of guest runtime binaries (the local copies
-    /// `sync-binaries` leaves behind). When set they are packed into a
-    /// read-only `runtime.erofs` that the VM attaches as a block device, and
-    /// the manifest target gains a `runtime` entry. When unset the target
-    /// carries no `runtime` and consumers keep exec'ing over VirtioFS.
-    pub runtime_bin_dir: Option<PathBuf>,
 }
 
 pub fn build_release(opts: &BuildReleaseOpts) -> Result<()> {
@@ -79,30 +72,6 @@ pub fn build_release(opts: &BuildReleaseOpts) -> Result<()> {
         _ => "console=hvc0 root=/dev/vda ro rootfstype=erofs earlycon",
     };
 
-    // Optional: pack the guest runtime binaries into a read-only image.
-    let runtime_entry = if let Some(ref bin_dir) = opts.runtime_bin_dir {
-        if !bin_dir.is_dir() {
-            bail!("runtime bin dir not found: {}", bin_dir.display());
-        }
-        let runtime_work = work.join("runtime.erofs");
-        build_runtime_image(
-            bin_dir,
-            &binaries,
-            &opts.arch,
-            &runtime_work,
-            &opts.erofs_compression,
-        )?;
-        Some(FileEntry {
-            path: asset_object_path(&opts.version, &opts.arch, "runtime.erofs"),
-            sha256: sha256_file(&runtime_work)?,
-            version: None,
-        })
-    } else {
-        None
-    };
-
-    let runtime_built = runtime_entry.is_some();
-
     let target = Target {
         kernel: FileEntry {
             path: asset_object_path(&opts.version, &opts.arch, "kernel"),
@@ -115,7 +84,7 @@ pub fn build_release(opts: &BuildReleaseOpts) -> Result<()> {
             version: None,
         },
         kernel_cmdline: kernel_cmdline.to_string(),
-        runtime: runtime_entry,
+        runtime: None,
     };
 
     let mut targets = BTreeMap::new();
@@ -144,10 +113,7 @@ pub fn build_release(opts: &BuildReleaseOpts) -> Result<()> {
     let tarball_path = opts.output_dir.join(&tarball_name);
 
     println!("==> Packaging tarball");
-    let mut tarball_files = vec!["kernel", "rootfs.erofs", "manifest.json"];
-    if runtime_built {
-        tarball_files.push("runtime.erofs");
-    }
+    let tarball_files = ["kernel", "rootfs.erofs", "manifest.json"];
     create_tar_gz(&tarball_path, work, &tarball_files)?;
 
     // Write checksum.
@@ -159,15 +125,6 @@ pub fn build_release(opts: &BuildReleaseOpts) -> Result<()> {
 
     // Copy manifest to output dir.
     fs::write(opts.output_dir.join("manifest.json"), &manifest_json)?;
-
-    // The runtime image is uploaded to the CDN next to the kernel/rootfs, so
-    // it has to leave the temp work dir too.
-    if runtime_built {
-        fs::copy(
-            work.join("runtime.erofs"),
-            opts.output_dir.join("runtime.erofs"),
-        )?;
-    }
 
     let tarball_size = format_size(fs::metadata(&tarball_path)?.len(), BINARY);
     let kernel_size = format_size(fs::metadata(&kernel_work)?.len(), BINARY);

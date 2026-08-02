@@ -47,13 +47,6 @@ const MOUNT_DIRS: &[&str] = &[
     "tmp", "run", "proc", "sys", "dev", "mnt", "arcbox", "Users", "etc", "var", "export",
 ];
 
-// FEX is delivered as an ArcBox runtime binary, so it lands in the guest under
-// `/arcbox/runtime/bin/` (the `ARCBOX_RUNTIME_BIN_DIR` convention shared with
-// `dockerd`/`containerd`), alongside the VirtioFS `arcbox` share root.
-const FEX_BINARY: &str = "/arcbox/runtime/bin/FEX";
-
-const FEX_X86_64_BINFMT_ENTRY: &str = r#":FEX-x86_64:M:0:\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x3e\x00:\xff\xff\xff\xff\xff\xfe\xfe\x00\x00\x00\x00\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/arcbox/runtime/bin/FEX:POCF"#;
-
 /// Path to the staged guest agent on the VirtioFS `arcbox` share.
 const AGENT_BIN: &str = "/arcbox/bin/arcbox-agent";
 
@@ -77,20 +70,18 @@ fn inittab() -> String {
 
 /// `sysinit` script run once by busybox init before the agent is respawned.
 ///
-/// Mounts the early pseudo-filesystems and the VirtioFS `arcbox` share, registers
-/// FEX for amd64 ELF binaries, then runs the agent's one-shot system
-/// initialization (`arcbox-agent init`: writable mounts, networking, `/etc`). On
-/// success `init` exits 0 and busybox respawns the long-running agent. A non-zero
-/// exit means a critical writable layer failed to mount, so rcS powers the VM off
-/// for a clean host-driven retry instead of respawning an agent that would run
-/// broken on the read-only EROFS rootfs.
+/// Mounts the early pseudo-filesystems and the VirtioFS `arcbox` share, then
+/// runs the agent's one-shot system initialization (`arcbox-agent init`:
+/// writable mounts, networking, `/etc`). On success `init` exits 0 and busybox
+/// respawns the long-running agent. A non-zero exit means a critical writable
+/// layer failed to mount, so rcS powers the VM off for a clean host-driven
+/// retry instead of respawning an agent that would run broken on the read-only
+/// EROFS rootfs.
 fn rcs_script() -> Result<String> {
     render_template(
         "rcS.sh",
         include_str!("scripts/rcS.sh"),
         context! {
-            FEX_BINARY => FEX_BINARY,
-            FEX_X86_64_BINFMT_ENTRY => FEX_X86_64_BINFMT_ENTRY,
             AGENT_BIN => AGENT_BIN,
         },
     )
@@ -348,10 +339,7 @@ pub(crate) fn mkfs_erofs_block_flag() -> String {
 mod tests {
     use fs_err as fs;
 
-    use super::{
-        FEX_BINARY, FEX_X86_64_BINFMT_ENTRY, inittab, mkfs_erofs_block_flag, rcs_script,
-        write_boot_sequence,
-    };
+    use super::{inittab, mkfs_erofs_block_flag, rcs_script, write_boot_sequence};
 
     #[test]
     fn mkfs_erofs_block_flag_uses_4k_syntax() {
@@ -364,27 +352,16 @@ mod tests {
     }
 
     #[test]
-    fn fex_binfmt_entry_matches_upstream_shape() {
-        assert!(FEX_X86_64_BINFMT_ENTRY.starts_with(":FEX-x86_64:M:0:"));
-        assert!(FEX_X86_64_BINFMT_ENTRY.contains(r"\x7fELF\x02"));
-        assert!(FEX_X86_64_BINFMT_ENTRY.contains(r"\x3e\x00"));
-        assert!(FEX_X86_64_BINFMT_ENTRY.ends_with(&format!(":{FEX_BINARY}:POCF")));
-        assert!(!FEX_X86_64_BINFMT_ENTRY.contains('\0'));
-    }
-
-    #[test]
-    fn rcs_script_runs_agent_init_after_virtiofs_and_fex() {
+    fn rcs_script_runs_agent_init_after_virtiofs() {
         let script = rcs_script().unwrap();
         let mount_arcbox = script.find("mount -t virtiofs arcbox /arcbox").unwrap();
-        let fex_check = script.find(&format!("[ -x {FEX_BINARY} ]")).unwrap();
         let agent_init = script.find("/arcbox/bin/arcbox-agent init").unwrap();
 
-        // FEX registers after the share is mounted; the one-shot `arcbox-agent
-        // init` runs last so busybox init can then respawn the long-running agent.
-        assert!(mount_arcbox < fex_check);
-        assert!(fex_check < agent_init);
-        assert!(script.contains("mount -t binfmt_misc binfmt_misc"));
-        assert!(script.contains(FEX_X86_64_BINFMT_ENTRY));
+        // The one-shot `arcbox-agent init` runs after the share is mounted so
+        // busybox init can then respawn the long-running agent.
+        assert!(mount_arcbox < agent_init);
+        assert!(!script.contains("FEX"));
+        assert!(!script.contains("binfmt_misc"));
         // sysinit is one-shot: it must not exec/replace itself with the agent.
         assert!(!script.contains("exec /arcbox/bin/arcbox-agent"));
         // No busybox `timeout` wrapper: its arg syntax is version-dependent and a
@@ -395,7 +372,6 @@ mod tests {
         // broken agent.
         assert!(script.contains("poweroff -f"));
         assert!(!script.contains("init || true"));
-        assert!(!script.contains("export FEX_ROOTFS"));
         assert!(!script.contains('\0'));
     }
 
