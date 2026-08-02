@@ -40,6 +40,8 @@ fn published_boot_assets_are_consumable_without_hv() {
 
     runtime.block_on(async {
         let cache_dir = temp.path().join("cache");
+        fs::create_dir_all(cache_dir.join(VERSION)).unwrap();
+        fs::write(cache_dir.join(VERSION).join("runtime.erofs"), b"legacy").unwrap();
         let manager = AssetManager::new(AssetManagerConfig {
             cdn_base_url: server.base_url(),
             version: VERSION.to_string(),

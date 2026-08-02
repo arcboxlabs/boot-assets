@@ -93,6 +93,11 @@ impl AssetManager {
     pub async fn prepare(&self, progress: Option<ProgressCallback>) -> Result<PreparedAssets> {
         let version_dir = self.config.cache_dir.join(&self.config.version);
         tokio::fs::create_dir_all(&version_dir).await?;
+        match tokio::fs::remove_file(version_dir.join("runtime.erofs")).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
         let mut verify_cache = VerifyCache::load(&version_dir).await;
 
         // Step 1: Fetch and validate manifest.
