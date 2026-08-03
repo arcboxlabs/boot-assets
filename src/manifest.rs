@@ -41,15 +41,11 @@ pub struct Target {
     pub kernel: FileEntry,
     pub rootfs: FileEntry,
     pub kernel_cmdline: String,
-    /// Read-only EROFS image of the guest container-runtime binaries
-    /// (dockerd, containerd, the shim, runc, …), attached to the VM as a
-    /// block device.
+    /// Legacy read-only runtime image entry.
     ///
-    /// Exec'ing those over the VirtioFS share costs a FUSE round-trip per
-    /// exec — measured 7-10x more than exec from block-backed storage, and
-    /// paid on every container start. Optional so both skew directions stay
-    /// safe: a newer consumer reading an older manifest sees `None` and
-    /// keeps using the VirtioFS copies, and an older consumer ignores it.
+    /// Retained so deserializing and reserializing manifests published before
+    /// runtime binaries moved to the guest Btrfs cache preserves the entry.
+    /// Current producers omit it and current consumers do not download it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime: Option<FileEntry>,
 }

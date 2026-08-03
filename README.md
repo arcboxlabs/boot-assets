@@ -11,12 +11,14 @@ Each release publishes per-architecture tarballs plus a unified multi-target man
 The tarball contains:
 
 1. `kernel` — pre-built Linux kernel from [`arcboxlabs/kernel`](https://github.com/arcboxlabs/kernel) (all drivers built-in, `CONFIG_MODULES=n`)
-2. `rootfs.erofs` — minimal read-only rootfs (busybox + mkfs.btrfs + iptables-legacy + CA certs + optional FEX binfmt registration)
+2. `rootfs.erofs` — minimal read-only rootfs (busybox + mkfs.btrfs + iptables-legacy + CA certs)
 3. `manifest.json` — per-arch manifest (merged into unified manifest at release time)
 
 No agent binary in the boot tarball, and no initramfs.
 Guest runtime binaries are published separately as manifest-listed host-side
-binaries and are shared into the VM via VirtioFS from the host.
+binaries. The host exposes them as a VirtioFS transfer source; the guest
+verifies and materializes each generation onto its Btrfs data disk before
+execution.
 
 ## Manifest Schema
 
@@ -56,6 +58,10 @@ The manifest supports multiple target architectures and host-side binaries:
   ]
 }
 ```
+
+The optional `targets.{arch}.runtime` field remains accepted only so older
+manifests stay parseable. New releases do not emit or download the legacy
+`runtime.erofs` block image.
 
 `boot-assets sync-binaries` supports both tarball extraction and direct binary
 downloads. Use `format = "tgz"` plus `extract = "path/in/archive"` for archive
@@ -203,7 +209,7 @@ Output files are written to `dist/`.
 ├── bin/
 │   └── busybox          # Static busybox (+ symlinks: sh, mount, mkdir, ...)
 ├── sbin/
-│   ├── init             # Trampoline: mount /proc /sys /dev → mount VirtioFS → register FEX if available → exec agent
+│   ├── init             # busybox init: early mounts → mount VirtioFS → run agent init
 │   ├── mkfs.btrfs       # Btrfs formatter (first-boot data disk)
 │   ├── iptables         # iptables-legacy (Docker bridge networking)
 │   └── (symlinks)       # iptables-save, iptables-restore, ip6tables, ...
@@ -214,25 +220,20 @@ Output files are written to `dist/`.
 └── (mount points)       # tmp/ run/ proc/ sys/ dev/ mnt/ arcbox/ Users/ etc/ var/
 ```
 
-## FEX binfmt hook
+## FEX runtime
 
-The rootfs does not embed FEX itself. During boot, `/sbin/init` mounts the
-`arcbox` VirtioFS share and checks for `/arcbox/runtime/bin/FEX` (the
-`ARCBOX_RUNTIME_BIN_DIR` location ArcBox installs runtime binaries into,
-alongside `dockerd`/`containerd`). If present, it mounts `binfmt_misc` and
-registers the upstream FEX x86_64 ELF handler with `POCF` flags:
+The rootfs does not embed or register FEX. The guest agent copies the
+manifest-listed binary into the active Btrfs runtime generation, then registers
+`/run/arcbox/runtime/bin/FEX` as the x86_64 `binfmt_misc` interpreter with the
+upstream `POCF` flags. Registration therefore never pins a VirtioFS file
+descriptor. If FEX is absent, boot continues normally and no x86_64 handler is
+registered.
 
-```text
-:FEX-x86_64:M:0:\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x3e\x00:\xff\xff\xff\xff\xff\xfe\xfe\x00\x00\x00\x00\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/arcbox/runtime/bin/FEX:POCF
-```
-
-The registered interpreter is the arm64 FEX binary itself. `FEX_ROOTFS` is not
-set; FEX's built-in default RootFS is `/`, so amd64 OCI containers provide their
-own amd64 rootfs, loader, and shared libraries. The `F` flag pins the opened
-interpreter at registration time so
-x86_64 container processes can still invoke it even when `/arcbox` is not
-visible inside the container rootfs. If FEX is absent, boot continues normally
-and no x86_64 handler is registered.
+`FEX_ROOTFS` is not set; FEX's built-in default RootFS is `/`, so amd64 OCI
+containers provide their own amd64 rootfs, loader, and shared libraries. The
+`F` flag pins the opened Btrfs-backed interpreter so container processes can
+invoke it even when the runtime path is not visible inside the container
+rootfs.
 
 FEX is built from source in the release workflow with `boot-assets build fex`.
 The command builds the arm64 `FEX` interpreter as a

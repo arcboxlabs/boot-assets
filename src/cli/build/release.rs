@@ -40,11 +40,6 @@ pub struct BuildReleaseArgs {
     /// Path to JSON file with binary entries (output of `sync-binaries`).
     #[arg(long)]
     binaries_json: Option<PathBuf>,
-    /// Directory of guest runtime binaries to pack into a read-only
-    /// `runtime.erofs` image (the local copies `sync-binaries` leaves
-    /// behind). Omit to publish a manifest without a runtime image.
-    #[arg(long)]
-    runtime_bin_dir: Option<PathBuf>,
 }
 
 impl BuildReleaseArgs {
@@ -61,7 +56,6 @@ impl BuildReleaseArgs {
             source_sha: self.source_sha,
             kernel_version: self.kernel_version,
             binaries_json: self.binaries_json,
-            runtime_bin_dir: self.runtime_bin_dir,
         })
     }
 }

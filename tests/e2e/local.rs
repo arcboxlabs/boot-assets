@@ -12,12 +12,13 @@ use std::thread;
 use std::time::Duration;
 
 use arcbox_boot::asset_manager::{AssetManager, AssetManagerConfig};
-use arcbox_boot::manifest::{Binary, BinaryTarget, Manifest};
+use arcbox_boot::manifest::{Binary, BinaryTarget, FileEntry, Manifest};
 use flate2::read::GzDecoder;
 use sha2::{Digest, Sha256};
 use tar::Archive;
 
 const VERSION: &str = "9.9.9-e2e";
+const LEGACY_VERSION: &str = "9.9.8-e2e";
 
 #[test]
 fn published_boot_assets_are_consumable_without_hv() {
@@ -40,6 +41,15 @@ fn published_boot_assets_are_consumable_without_hv() {
 
     runtime.block_on(async {
         let cache_dir = temp.path().join("cache");
+        fs::create_dir_all(cache_dir.join(VERSION)).unwrap();
+        fs::create_dir_all(cache_dir.join(LEGACY_VERSION)).unwrap();
+        fs::write(cache_dir.join(VERSION).join("runtime.erofs"), b"legacy").unwrap();
+        fs::write(
+            cache_dir.join(LEGACY_VERSION).join("runtime.erofs"),
+            b"legacy",
+        )
+        .unwrap();
+        fs::write(cache_dir.join(LEGACY_VERSION).join("kernel"), b"keep").unwrap();
         let manager = AssetManager::new(AssetManagerConfig {
             cdn_base_url: server.base_url(),
             version: VERSION.to_string(),
@@ -63,6 +73,15 @@ fn published_boot_assets_are_consumable_without_hv() {
             fs::read_to_string(&prepared.rootfs).unwrap(),
             "fake-rootfs-x86_64\n"
         );
+        assert!(prepared.manifest.targets["x86_64"].runtime.is_some());
+        assert!(!cache_dir.join(VERSION).join("runtime.erofs").exists());
+        assert!(
+            !cache_dir
+                .join(LEGACY_VERSION)
+                .join("runtime.erofs")
+                .exists()
+        );
+        assert!(cache_dir.join(LEGACY_VERSION).join("kernel").exists());
 
         let bin_dir = temp.path().join("guest/bin");
         manager.prepare_binaries(&bin_dir, None).await.unwrap();
@@ -158,6 +177,24 @@ impl PublishedFixture {
             output.join("manifest.json").to_str().unwrap(),
         ]);
 
+        // Exercise compatibility with already-published manifests. The runtime
+        // object deliberately does not exist: current consumers must ignore
+        // the legacy entry instead of trying to download it.
+        let merged_manifest_path = output.join("manifest.json");
+        let mut merged_manifest = read_manifest(&merged_manifest_path);
+        for (arch, target) in &mut merged_manifest.targets {
+            target.runtime = Some(FileEntry {
+                path: format!("asset/v{VERSION}/{arch}/runtime.erofs"),
+                sha256: "0".repeat(64),
+                version: None,
+            });
+        }
+        fs::write(
+            &merged_manifest_path,
+            serde_json::to_string_pretty(&merged_manifest).unwrap(),
+        )
+        .unwrap();
+
         publish_boot_assets(&output, &cdn_root);
 
         Self { output, cdn_root }
@@ -251,6 +288,7 @@ fn assert_release_tarball_contract(release_dir: &Path, arch: &str) {
     assert_eq!(manifest.asset_version, VERSION);
     assert_eq!(manifest.schema_version, 9);
     assert!(manifest.targets.contains_key(arch));
+    assert!(manifest.targets[arch].runtime.is_none());
 }
 
 fn assert_manifest_contract(path: &Path) {
@@ -276,6 +314,11 @@ fn assert_manifest_contract(path: &Path) {
         x86.rootfs.sha256,
         sha256_file(&path.parent().unwrap().join("x86_64/rootfs.erofs"))
     );
+    assert!(
+        x86.runtime.is_some(),
+        "legacy runtime entry must remain parseable"
+    );
+    assert!(!path.parent().unwrap().join("x86_64/runtime.erofs").exists());
 
     let direct = manifest
         .binaries
