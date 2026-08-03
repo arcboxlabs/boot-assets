@@ -43,9 +43,9 @@ pub struct Target {
     pub kernel_cmdline: String,
     /// Legacy read-only runtime image entry.
     ///
-    /// Retained only so manifests published before runtime binaries moved to
-    /// the guest Btrfs cache remain parseable. Current producers omit it and
-    /// current consumers do not download it.
+    /// Retained so deserializing and reserializing manifests published before
+    /// runtime binaries moved to the guest Btrfs cache preserves the entry.
+    /// Current producers omit it and current consumers do not download it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runtime: Option<FileEntry>,
 }

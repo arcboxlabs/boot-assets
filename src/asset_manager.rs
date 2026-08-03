@@ -67,13 +67,14 @@ impl AssetManager {
         let valid_version = !config.version.is_empty()
             && config.version != "."
             && config.version != ".."
-            && config
-                .version
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'));
+            && config.version.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_' | b'+')
+            });
         if !valid_version {
             return Err(Error::InvalidConfig(
-                "version must contain only ASCII letters, digits, '.', '-', or '_'".into(),
+                "version must be non-empty, not '.' or '..', and contain only ASCII letters, \
+                 digits, '.', '-', '_', or '+'"
+                    .into(),
             ));
         }
         if config.arch.is_empty() {
@@ -93,10 +94,16 @@ impl AssetManager {
     pub async fn prepare(&self, progress: Option<ProgressCallback>) -> Result<PreparedAssets> {
         let version_dir = self.config.cache_dir.join(&self.config.version);
         tokio::fs::create_dir_all(&version_dir).await?;
-        match tokio::fs::remove_file(version_dir.join("runtime.erofs")).await {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error.into()),
+        let mut cached_versions = tokio::fs::read_dir(&self.config.cache_dir).await?;
+        while let Some(entry) = cached_versions.next_entry().await? {
+            if !entry.file_type().await?.is_dir() {
+                continue;
+            }
+            match tokio::fs::remove_file(entry.path().join("runtime.erofs")).await {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
         }
         let mut verify_cache = VerifyCache::load(&version_dir).await;
 
@@ -315,6 +322,7 @@ impl AssetManager {
 #[cfg(test)]
 mod tests {
     use super::{AssetManager, AssetManagerConfig};
+    use crate::error::Error;
 
     #[test]
     fn version_must_be_a_safe_runtime_generation() {
@@ -323,7 +331,7 @@ mod tests {
             ..AssetManagerConfig::default()
         };
 
-        for valid in ["0.8.0", "release-0_8"] {
+        for valid in ["0.8.0", "0.8.0+hotfix", "release-0_8"] {
             assert!(AssetManager::new(config(valid)).is_ok());
         }
         for invalid in [
@@ -336,9 +344,13 @@ mod tests {
             "0.8.0 rc1",
             "版本-0.8.0",
         ] {
-            assert!(
-                AssetManager::new(config(invalid)).is_err(),
-                "{invalid:?} must be rejected"
+            let Err(Error::InvalidConfig(message)) = AssetManager::new(config(invalid)) else {
+                panic!("{invalid:?} must be rejected as invalid configuration");
+            };
+            assert_eq!(
+                message,
+                "version must be non-empty, not '.' or '..', and contain only ASCII letters, \
+                 digits, '.', '-', '_', or '+'"
             );
         }
     }

@@ -18,6 +18,7 @@ use sha2::{Digest, Sha256};
 use tar::Archive;
 
 const VERSION: &str = "9.9.9-e2e";
+const LEGACY_VERSION: &str = "9.9.8-e2e";
 
 #[test]
 fn published_boot_assets_are_consumable_without_hv() {
@@ -41,7 +42,14 @@ fn published_boot_assets_are_consumable_without_hv() {
     runtime.block_on(async {
         let cache_dir = temp.path().join("cache");
         fs::create_dir_all(cache_dir.join(VERSION)).unwrap();
+        fs::create_dir_all(cache_dir.join(LEGACY_VERSION)).unwrap();
         fs::write(cache_dir.join(VERSION).join("runtime.erofs"), b"legacy").unwrap();
+        fs::write(
+            cache_dir.join(LEGACY_VERSION).join("runtime.erofs"),
+            b"legacy",
+        )
+        .unwrap();
+        fs::write(cache_dir.join(LEGACY_VERSION).join("kernel"), b"keep").unwrap();
         let manager = AssetManager::new(AssetManagerConfig {
             cdn_base_url: server.base_url(),
             version: VERSION.to_string(),
@@ -67,6 +75,13 @@ fn published_boot_assets_are_consumable_without_hv() {
         );
         assert!(prepared.manifest.targets["x86_64"].runtime.is_some());
         assert!(!cache_dir.join(VERSION).join("runtime.erofs").exists());
+        assert!(
+            !cache_dir
+                .join(LEGACY_VERSION)
+                .join("runtime.erofs")
+                .exists()
+        );
+        assert!(cache_dir.join(LEGACY_VERSION).join("kernel").exists());
 
         let bin_dir = temp.path().join("guest/bin");
         manager.prepare_binaries(&bin_dir, None).await.unwrap();
