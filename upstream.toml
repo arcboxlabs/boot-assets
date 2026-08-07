@@ -118,7 +118,7 @@ extract = "release-v1.16.1-x86_64/jailer-v1.16.1-x86_64"
 # 200-300 ms class. arm64 boots nested inside the macOS System VM (DT
 # discovery, Image artifact, no ACPI); x86_64 boots on bare-metal Linux
 # KVM hosts via Firecracker's hardware-reduced ACPI (DSDT-enumerated
-# virtio-mmio, ELF vmlinux artifact) and requires Firecracker >= 1.7.
+# virtio-mmio, ELF vmlinux artifact) and requires Firecracker >= 1.8.
 # The version string keys the immutable CDN path
 # (bin/vmlinux/{version}/{arch}/vmlinux) and must change whenever the
 # kernel bytes change, so rollback = revert this pin.
