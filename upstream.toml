@@ -113,25 +113,25 @@ extract = "release-v1.16.1-x86_64/jailer-v1.16.1-x86_64"
 # --- Guest kernel image (for Firecracker microVMs) ---
 # Placed at /arcbox/kernel/vmlinux inside the guest VM.
 #
-# arm64 is the arcboxlabs/kernel `microvm` flavor (CORE-79): a dedicated
-# minimal sandbox kernel (virtio-mmio only, no PCI/ACPI/EFI/netfilter)
-# targeting kernel-entry -> PID 1 in the 200-300 ms class under nested
-# virt. The version string keys the immutable CDN path
-# (bin/vmlinux/{version}/{arch}/vmlinux), so rollback = revert this pin.
-#
-# x86_64 stays on the stock Firecracker CI kernel until an x86 microvm
-# config lands (Firecracker x86_64 boots an ELF vmlinux and needs
-# VIRTIO_MMIO_CMDLINE_DEVICES + kvmclock).
+# Both arches are the arcbox `microvm` kernel flavor: a dedicated
+# minimal sandbox kernel targeting kernel-entry -> PID 1 in the
+# 200-300 ms class. arm64 boots nested inside the macOS System VM (DT
+# discovery, Image artifact, no ACPI); x86_64 boots on bare-metal Linux
+# KVM hosts via Firecracker's hardware-reduced ACPI (DSDT-enumerated
+# virtio-mmio, ELF vmlinux artifact) and requires Firecracker >= 1.7.
+# The version string keys the immutable CDN path
+# (bin/vmlinux/{version}/{arch}/vmlinux) and must change whenever the
+# kernel bytes change, so rollback = revert this pin.
 
 [[binaries]]
 name = "vmlinux"
-version = "0.0.23-microvm"
+version = "0.0.24-microvm"
 install_dir = "kernel"
 
 [binaries.source.arm64]
 format = "binary"
-url = "https://github.com/arcboxlabs/kernel/releases/download/v0.0.23/microvm-kernel-arm64"
+url = "https://github.com/arcboxlabs/kernel/releases/download/v0.0.24/microvm-kernel-arm64"
 
 [binaries.source.x86_64]
 format = "binary"
-url = "https://s3.amazonaws.com/spec.ccfc.min/firecracker-ci/v1.14/x86_64/vmlinux-6.1.155"
+url = "https://github.com/arcboxlabs/kernel/releases/download/v0.0.24/microvm-kernel-x86_64"
