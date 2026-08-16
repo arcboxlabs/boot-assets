@@ -229,16 +229,18 @@ jobs:
       - name: Build CLI
         run: cargo build --release --features build --no-default-features
 
-      # The manifest version is derived from upstream.toml's dockerd pin plus
-      # `-arcbox.{patch-level}` — see src/cli/build/containerd.rs. The suffix
-      # is what keeps this object off the CDN key sync-binaries.yml uses for
-      # the same Docker version, which matters because Go builds are not
-      # bit-reproducible, the B2 sync is --size-only, and Cloudflare caches
-      # for hours.
+      # The manifest version is derived (see src/cli/build/containerd.rs):
+      # upstream.toml's dockerd pin + `-arcbox.{patch-level}` + the release
+      # version. The release stamp is what makes the CDN key unique per
+      # release, which this workflow already learned the hard way for FEX:
+      # these builds are not bit-reproducible, the B2 sync is --size-only, and
+      # Cloudflare caches for hours, so a reused key serves bytes that no
+      # longer match the manifest's sha256.
       - name: Build containerd
         run: |
           ./target/release/boot-assets build containerd \
             --arch "${{ matrix.arch }}" \
+            --release-version "${{ needs.resolve-vars.outputs.version }}" \
             --output "$PWD/dist/bin" \
             --binaries-json "$PWD/dist/containerd-binaries.json"
 

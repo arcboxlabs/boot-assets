@@ -42,13 +42,20 @@ pub struct BuildContainerdArgs {
     upstream: PathBuf,
     /// Patch-set generation, appended as `-arcbox.<N>`.
     ///
-    /// Bump it when the patches change without a Docker bump. The suffix is
-    /// not cosmetic: the vanilla object for the same Docker version already
-    /// exists on the CDN, Go builds are not bit-reproducible, and the B2 sync
-    /// is `--size-only`, so a reused key serves bytes that do not match the
-    /// manifest's sha256.
+    /// Bump it when the patches change without a Docker bump.
     #[arg(long, default_value_t = 1)]
     patch_level: u32,
+    /// Asset release this build belongs to (e.g. `0.8.6`), appended last.
+    ///
+    /// Load-bearing, and the reason the Docker version alone is not enough:
+    /// every release rebuilds containerd in a fresh temp dir, so the bytes
+    /// differ while the size usually does not — and the B2 sync is
+    /// `--size-only`. Reusing a key across releases would leave the CDN
+    /// serving the previous release's binary against the new release's
+    /// sha256, which fails closed in the daemon's checksum check. Same reason
+    /// FEX stamps the release into its version.
+    #[arg(long)]
+    release_version: String,
     /// Version compiled into the binary (`containerd --version`). Defaults to
     /// the source ref with an `-arcbox` suffix so a running daemon's logs say
     /// plainly that this is not stock containerd.
@@ -65,7 +72,10 @@ pub struct BuildContainerdArgs {
 impl BuildContainerdArgs {
     pub fn run(self) -> Result<()> {
         let package_version = docker_package_version(&self.upstream)?;
-        let version = format!("{package_version}-arcbox.{}", self.patch_level);
+        let version = format!(
+            "{package_version}-arcbox.{}-{}",
+            self.patch_level, self.release_version
+        );
         let internal_version = self
             .internal_version
             .unwrap_or_else(|| format!("{}-arcbox.{}", self.source_ref, self.patch_level));

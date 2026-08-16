@@ -63,12 +63,14 @@ pub struct BuildContainerdOpts {
     /// Version recorded in the release manifest and used as the CDN key
     /// (`bin/containerd/{version}/{arch}/containerd`).
     ///
-    /// Follows the sibling binaries' Docker package version with a patch
-    /// suffix, e.g. `29.7.2-arcbox.1`. The suffix is not cosmetic: the vanilla
-    /// `29.7.2` object already exists on the CDN from `sync-binaries`, Go
-    /// builds are not bit-reproducible, and the B2 sync is `--size-only`, so
-    /// reusing the key would leave the CDN serving bytes that do not match the
-    /// sha256 in the manifest.
+    /// Carries three things, and each earns its place — see
+    /// [`crate::cli`]'s `build containerd` args: the sibling binaries' Docker
+    /// package version, the patch-set generation, and the asset release. The
+    /// first two keep this object off the vanilla key `sync-binaries`
+    /// publishes; the third keeps successive releases off each other's. Go
+    /// builds are not bit-reproducible and the B2 sync is `--size-only`, so a
+    /// reused key leaves the CDN serving bytes that do not match the sha256 in
+    /// the manifest.
     pub version: String,
     /// Version compiled into the binary and reported by `containerd
     /// --version`, e.g. `v2.3.3-arcbox.1`. Passed explicitly rather than left
