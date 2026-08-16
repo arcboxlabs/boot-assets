@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -6,10 +5,9 @@ use fs_err as fs;
 use goblin::elf::{Elf, program_header::PT_INTERP};
 use xshell::{Shell, cmd};
 
-use arcbox_boot::manifest::{Binary, BinaryTarget};
-use arcbox_boot::util::{
-    binary_object_path, read_json_file, set_executable, sha256_file, write_json_pretty,
-};
+use arcbox_boot::manifest::Binary;
+
+use super::vendored::{append_binaries_json, apply_patches, stage_file};
 
 const FEX_ARCH: &str = "arm64";
 const FEX_BINARIES: &[&str] = &["FEX"];
@@ -31,7 +29,7 @@ pub fn build_fex(opts: &BuildFexOpts) -> Result<()> {
     let build = work.path().join("build");
 
     clone_fex(&sh, &opts.repo, &opts.source_ref, &source)?;
-    apply_patches(&sh, &source, &opts.patches_dir)?;
+    apply_patches(&sh, "FEX", &source, &opts.patches_dir)?;
     configure_fex(&sh, &source, &build)?;
     run_ninja(&sh, &build)?;
 
@@ -53,38 +51,6 @@ fn clone_fex(sh: &Shell, repo: &str, source_ref: &str, source: &Path) -> Result<
     )
     .run()
     .with_context(|| format!("git clone failed for FEX ref {source_ref}"))
-}
-
-/// Applies every `*.patch` in `patches_dir` to the cloned FEX `source`, in
-/// sorted filename order. These are vendored source changes not upstream (e.g.
-/// dropping the FEXServer dependency).
-fn apply_patches(sh: &Shell, source: &Path, patches_dir: &Path) -> Result<()> {
-    if !patches_dir.is_dir() {
-        bail!("FEX patches dir not found: {}", patches_dir.display());
-    }
-    let mut patches: Vec<PathBuf> = fs::read_dir(patches_dir)
-        .with_context(|| format!("failed to read patches dir {}", patches_dir.display()))?
-        .map(|entry| entry.map(|entry| entry.path()))
-        .collect::<std::io::Result<Vec<_>>>()
-        .with_context(|| format!("failed to read an entry in {}", patches_dir.display()))?
-        .into_iter()
-        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("patch"))
-        .collect();
-    patches.sort();
-    if patches.is_empty() {
-        bail!("no .patch files in {}", patches_dir.display());
-    }
-
-    for patch in &patches {
-        // `git -C` changes directory, so the patch path must be absolute.
-        let abs = fs::canonicalize(patch)
-            .with_context(|| format!("failed to resolve patch {}", patch.display()))?;
-        println!("==> Applying patch {}", patch.display());
-        cmd!(sh, "git -C {source} apply --verbose {abs}")
-            .run()
-            .with_context(|| format!("git apply failed for {}", patch.display()))?;
-    }
-    Ok(())
 }
 
 fn configure_fex(sh: &Shell, source: &Path, build: &Path) -> Result<()> {
@@ -134,7 +100,7 @@ fn stage_fex(build: &Path, output: &Path, version: &str) -> Result<Vec<Binary>> 
             .file_name()
             .and_then(|name| name.to_str())
             .ok_or_else(|| anyhow::anyhow!("invalid FEX binary filename: {}", src.display()))?;
-        entries.push(stage_file(output, version, name, None, &src)?);
+        entries.push(stage_file(output, version, FEX_ARCH, name, None, &src)?);
     }
 
     Ok(entries)
@@ -168,51 +134,4 @@ fn assert_static_executable(path: &Path) -> Result<()> {
         );
     }
     Ok(())
-}
-
-fn stage_file(
-    output: &Path,
-    version: &str,
-    name: &str,
-    install_dir: Option<&str>,
-    src: &Path,
-) -> Result<Binary> {
-    let dest = output.join(name).join(version).join(FEX_ARCH).join(name);
-    if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    fs::copy(src, &dest)
-        .with_context(|| format!("failed to copy {} to {}", src.display(), dest.display()))?;
-
-    set_executable(&dest)?;
-
-    let mut targets = BTreeMap::new();
-    targets.insert(
-        FEX_ARCH.to_string(),
-        BinaryTarget {
-            path: binary_object_path(name, version, FEX_ARCH),
-            sha256: sha256_file(&dest)?,
-        },
-    );
-
-    Ok(Binary {
-        name: name.to_string(),
-        version: version.to_string(),
-        targets,
-        install_dir: install_dir.map(str::to_string),
-    })
-}
-
-fn append_binaries_json(path: &Path, mut entries: Vec<Binary>) -> Result<()> {
-    let mut existing = if path.exists() {
-        read_json_file::<Vec<Binary>>(path)?
-    } else {
-        Vec::new()
-    };
-
-    existing.append(&mut entries);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-    write_json_pretty(path, &existing)
 }

@@ -171,7 +171,78 @@ jobs:
           retention-days: 1
 
   # ==========================================================================
-  # Stage 1c: Build FEX runtime from source on ARM64.
+  # Stage 1c: Build patched containerd from source, natively per arch.
+  #
+  # Unlike its four siblings, containerd does not come from Docker's static
+  # package — it carries containerd#13805, which no released containerd has
+  # yet. src/build/containerd.rs holds the rationale and the delete criteria.
+  #
+  # Native per-arch runners rather than cross-compilation: the build keeps CGO
+  # enabled to match Docker's own `make STATIC=1` recipe, and cross-building
+  # cgo would mean carrying a static C toolchain per target for no gain.
+  # ==========================================================================
+  build-containerd:
+    name: Build containerd (${{ matrix.arch }})
+    needs: resolve-vars
+    strategy:
+      matrix:
+        include:
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+          - arch: x86_64
+            runner: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # Pinned to the Go release Docker built its own containerd 29.7.2 with
+      # (read out of that binary), so the toolchain is not a second way our
+      # build can differ from theirs.
+      - name: Install Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.5"
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.arch }}-containerd-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-${{ matrix.arch }}-containerd-cargo-
+
+      - name: Build CLI
+        run: cargo build --release --features build --no-default-features
+
+      # The manifest version is derived from upstream.toml's dockerd pin plus
+      # `-arcbox.{patch-level}` — see src/cli/build/containerd.rs. The suffix
+      # is what keeps this object off the CDN key sync-binaries.yml uses for
+      # the same Docker version, which matters because Go builds are not
+      # bit-reproducible, the B2 sync is --size-only, and Cloudflare caches
+      # for hours.
+      - name: Build containerd
+        run: |
+          ./target/release/boot-assets build containerd \
+            --arch "${{ matrix.arch }}" \
+            --output "$PWD/dist/bin" \
+            --binaries-json "$PWD/dist/containerd-binaries.json"
+
+      - name: Upload containerd artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: containerd-runtime-${{ matrix.arch }}
+          path: dist/
+          retention-days: 14
+
+  # ==========================================================================
+  # Stage 1d: Build FEX runtime from source on ARM64.
   # ==========================================================================
   build-fex:
     name: Build FEX Runtime
@@ -229,7 +300,7 @@ jobs:
   # ==========================================================================
   assemble:
     name: Assemble (${{ matrix.arch }})
-    needs: [resolve-vars, download-kernel, build-rootfs, build-fex]
+    needs: [resolve-vars, download-kernel, build-rootfs, build-fex, build-containerd]
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -274,11 +345,35 @@ jobs:
           name: fex-runtime
           path: fex-runtime
 
+      - name: Download patched containerd
+        uses: actions/download-artifact@v8
+        with:
+          name: containerd-runtime-${{ matrix.arch }}
+          path: containerd-runtime
+
       - name: Sync runtime binaries
         run: |
           ./target/release/boot-assets sync-binaries \
             --arch ${{ matrix.arch }} \
             --binaries-json "$PWD/dist/binaries.json"
+
+      # containerd is absent from upstream.toml (it is built from patched
+      # source), so sync-binaries never emits it — it joins the manifest here,
+      # per arch, the same way FEX does below.
+      - name: Append patched containerd
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          merged = Path('dist/binaries.json')
+          data = json.loads(merged.read_text())
+          data.extend(json.loads(Path('containerd-runtime/containerd-binaries.json').read_text()))
+          merged.write_text(json.dumps(data, indent=2) + '\n')
+          PY
+
+          mkdir -p dist/bin
+          cp -a containerd-runtime/bin/. dist/bin/
 
       - name: Append FEX runtime binaries
         if: matrix.arch == 'arm64'
