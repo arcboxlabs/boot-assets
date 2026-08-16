@@ -1,13 +1,11 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use fs_err as fs;
-use goblin::elf::{Elf, program_header::PT_INTERP};
 use xshell::{Shell, cmd};
 
 use arcbox_boot::manifest::Binary;
 
-use super::vendored::{append_binaries_json, apply_patches, stage_file};
+use super::vendored::{append_binaries_json, apply_patches, assert_static_executable, stage_file};
 
 const FEX_ARCH: &str = "arm64";
 const FEX_BINARIES: &[&str] = &["FEX"];
@@ -95,7 +93,7 @@ fn stage_fex(build: &Path, output: &Path, version: &str) -> Result<Vec<Binary>> 
         // loader/library closure to stage and the binfmt-pinned interpreter
         // is self-contained inside OCI container namespaces. Fail loudly if
         // the build silently produced a dynamic binary.
-        assert_static_executable(&src)?;
+        assert_static_executable("FEX", &src)?;
         let name = src
             .file_name()
             .and_then(|name| name.to_str())
@@ -104,34 +102,4 @@ fn stage_fex(build: &Path, output: &Path, version: &str) -> Result<Vec<Binary>> 
     }
 
     Ok(entries)
-}
-
-/// Fails if `path` is a dynamically-linked ELF (carries a `PT_INTERP`).
-///
-/// A dynamic FEX cannot serve as a `binfmt_misc` interpreter inside an OCI
-/// container: the kernel resolves the interpreter's `PT_INTERP` against the
-/// container's mount namespace (the amd64 image rootfs), which does not
-/// contain FEX's loader, so exec fails with `ENOENT`. The static link in
-/// [`configure_fex`] removes that dependency; this guard ensures it actually
-/// took effect.
-///
-/// The FEX build must produce a valid ELF binary. Parse it directly so the
-/// check is independent of host tooling.
-fn assert_static_executable(path: &Path) -> Result<()> {
-    let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
-    let elf = Elf::parse(&bytes)
-        .with_context(|| format!("failed to parse {} as an ELF binary", path.display()))?;
-
-    if elf
-        .program_headers
-        .iter()
-        .any(|header| header.p_type == PT_INTERP)
-    {
-        bail!(
-            "{} is dynamically linked (has PT_INTERP); FEX must be statically \
-             linked to work as a binfmt_misc interpreter inside containers",
-            path.display()
-        );
-    }
-    Ok(())
 }

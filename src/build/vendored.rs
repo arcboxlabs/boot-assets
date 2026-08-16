@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use fs_err as fs;
+use goblin::elf::{Elf, program_header::PT_INTERP};
 use xshell::{Shell, cmd};
 
 use arcbox_boot::manifest::{Binary, BinaryTarget};
@@ -56,6 +57,42 @@ pub fn apply_patches(sh: &Shell, component: &str, source: &Path, patches_dir: &P
         cmd!(sh, "git -C {source} apply --verbose {abs}")
             .run()
             .with_context(|| format!("git apply failed for {}", patch.display()))?;
+    }
+    Ok(())
+}
+
+/// Fails if `path` is a dynamically-linked ELF (carries a `PT_INTERP`).
+///
+/// Every binary built here has to be self-contained, and each for its own
+/// reason:
+///
+/// - **FEX** is pinned as a `binfmt_misc` interpreter. The kernel resolves its
+///   `PT_INTERP` against the *container's* mount namespace — an amd64 image
+///   rootfs that has never heard of FEX's loader — so a dynamic build execs
+///   with `ENOENT`.
+/// - **containerd** runs in a guest whose rootfs is EROFS built from Alpine
+///   static binaries, with no glibc loader at all. A cgo build that only
+///   *partially* statically links still compiles, links, and passes CI, then
+///   fails to exec at guest boot — about as far from the cause as a failure
+///   can land.
+///
+/// Both builds ask for a static link; this checks the request took effect.
+/// The ELF is parsed directly so the guard does not depend on host tooling.
+pub fn assert_static_executable(component: &str, path: &Path) -> Result<()> {
+    let bytes = fs::read(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let elf = Elf::parse(&bytes)
+        .with_context(|| format!("failed to parse {} as an ELF binary", path.display()))?;
+
+    if elf
+        .program_headers
+        .iter()
+        .any(|header| header.p_type == PT_INTERP)
+    {
+        bail!(
+            "{} is dynamically linked (has PT_INTERP); {component} must be \
+             statically linked to run in the guest",
+            path.display()
+        );
     }
     Ok(())
 }

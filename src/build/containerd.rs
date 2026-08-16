@@ -42,7 +42,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use xshell::{Shell, cmd};
 
-use super::vendored::{append_binaries_json, apply_patches, stage_file};
+use super::vendored::{append_binaries_json, apply_patches, assert_static_executable, stage_file};
 
 /// Only `containerd` itself is built here. The shim stays on Docker's copy:
 /// the patch does not touch it, and the two only need to agree on the shim
@@ -95,6 +95,10 @@ pub fn build_containerd(opts: &BuildContainerdOpts) -> Result<()> {
     if !built.is_file() {
         bail!("containerd build did not produce {}", built.display());
     }
+    // `make STATIC=1` asks for a static link, but a cgo build that only
+    // partially honours it still links cleanly here and only fails at guest
+    // boot, where the EROFS rootfs has no dynamic loader to offer it.
+    assert_static_executable("containerd", &built)?;
 
     let staged = stage_file(
         &opts.output,
