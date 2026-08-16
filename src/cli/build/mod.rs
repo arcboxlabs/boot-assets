@@ -1,3 +1,4 @@
+mod containerd;
 mod fex;
 mod release;
 mod rootfs;
@@ -13,6 +14,8 @@ pub struct BuildArgs {
 
 #[derive(Subcommand)]
 enum BuildCommands {
+    /// Build patched containerd from source and append it to binaries JSON.
+    Containerd(containerd::BuildContainerdArgs),
     /// Build FEX from source and append runtime entries to binaries JSON.
     Fex(fex::BuildFexArgs),
     /// Build minimal EROFS rootfs from Alpine static binaries.
@@ -24,6 +27,7 @@ enum BuildCommands {
 impl BuildArgs {
     pub fn run(self) -> Result<()> {
         match self.command {
+            BuildCommands::Containerd(args) => args.run(),
             BuildCommands::Fex(args) => args.run(),
             BuildCommands::Rootfs(args) => args.run(),
             BuildCommands::Release(args) => args.run(),

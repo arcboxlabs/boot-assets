@@ -1,0 +1,113 @@
+From b29e368e810593a6afe6faed1834ca1b201b0ee9 Mon Sep 17 00:00:00 2001
+From: AprilNEA <github@sku.moe>
+Date: Fri, 17 Jul 2026 13:37:54 +0800
+Subject: [PATCH] overlay: don't override a configured index mount option
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+NewSnapshotter auto-appends "index=off" unless the configured
+mount_options already carry an index option — but the check used
+hasOption(..., "index", false), which compares against the literal
+string "index". No valid mount option ever equals "index" (it is
+always valued, "index=on"/"index=off"), so the append happened
+unconditionally whenever the kernel exposes the overlay index
+parameter.
+
+Mount options are last-wins in the kernel, so a user-configured
+"index=on" was silently overridden. Worse, configuring
+mount_options = ["index=on", "nfs_export=on"] (the documented way to
+make overlay mounts NFS-exportable) produced
+"index=on,nfs_export=on,index=off", which the kernel rejects with
+EINVAL (nfs_export=on conflicts with an explicit index=off) — breaking
+every snapshot mount including image unpack.
+
+Make hasOption match the key of a "key[=value]" option so callers need
+not care whether the option takes a value, and add a regression test.
+
+Signed-off-by: AprilNEA <github@sku.moe>
+(cherry picked from commit 5e25f36e5e23fdd759cbc87fb3dad61e7742da10)
+---
+ plugins/snapshots/overlay/overlay.go      | 19 +++++++++++--------
+ plugins/snapshots/overlay/overlay_test.go | 23 +++++++++++++++++++++++
+ 2 files changed, 34 insertions(+), 8 deletions(-)
+
+diff --git a/plugins/snapshots/overlay/overlay.go b/plugins/snapshots/overlay/overlay.go
+index 80535ba823adb..c56ffe5bab4ba 100644
+--- a/plugins/snapshots/overlay/overlay.go
++++ b/plugins/snapshots/overlay/overlay.go
+@@ -147,7 +147,7 @@ func NewSnapshotter(root string, opts ...Opt) (snapshots.Snapshotter, error) {
+ 		return nil, err
+ 	}
+ 
+-	if !hasOption(config.mountOptions, "userxattr", false) {
++	if !hasOption(config.mountOptions, "userxattr") {
+ 		// figure out whether "userxattr" option is recognized by the kernel && needed
+ 		userxattr, err := overlayutils.NeedsUserXAttr(root)
+ 		if err != nil {
+@@ -158,7 +158,9 @@ func NewSnapshotter(root string, opts ...Opt) (snapshots.Snapshotter, error) {
+ 		}
+ 	}
+ 
+-	if !hasOption(config.mountOptions, "index", false) && supportsIndex() {
++	// Mount options are last-wins in the kernel, so appending "index=off"
++	// after a configured "index=on" would silently override it.
++	if !hasOption(config.mountOptions, "index") && supportsIndex() {
+ 		config.mountOptions = append(config.mountOptions, "index=off")
+ 	}
+ 
+@@ -173,13 +175,14 @@ func NewSnapshotter(root string, opts ...Opt) (snapshots.Snapshotter, error) {
+ 	}, nil
+ }
+ 
+-func hasOption(options []string, key string, hasValue bool) bool {
++// hasOption reports whether the "key" option is present in options, either
++// as a bare flag ("userxattr") or in "key=value" form ("index=on").
++func hasOption(options []string, key string) bool {
+ 	for _, option := range options {
+-		if hasValue {
+-			if strings.HasPrefix(option, key) && len(option) > len(key) && option[len(key)] == '=' {
+-				return true
+-			}
+-		} else if option == key {
++		if option == key {
++			return true
++		}
++		if optionKey, _, ok := strings.Cut(option, "="); ok && optionKey == key {
+ 			return true
+ 		}
+ 	}
+diff --git a/plugins/snapshots/overlay/overlay_test.go b/plugins/snapshots/overlay/overlay_test.go
+index d5fe82b3905bd..440dff90e99bf 100644
+--- a/plugins/snapshots/overlay/overlay_test.go
++++ b/plugins/snapshots/overlay/overlay_test.go
+@@ -48,6 +48,29 @@ func newSnapshotterWithOpts(opts ...Opt) testsuite.SnapshotterFunc {
+ 	}
+ }
+ 
++// NewSnapshotter must not auto-append "index=off" when the configuration
++// already carries an index option: mount options are last-wins in the
++// kernel, so the appended "index=off" would silently override a configured
++// "index=on" — and combined with "nfs_export=on" it makes every overlay
++// mount fail with EINVAL (nfs_export=on conflicts with an explicit
++// index=off).
++func TestOverlayConfiguredIndexNotOverridden(t *testing.T) {
++	if !supportsIndex() {
++		t.Skip("kernel does not expose the overlay index parameter")
++	}
++	sn, err := NewSnapshotter(t.TempDir(), WithMountOptions([]string{"index=on", "nfs_export=on"}))
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer sn.Close()
++	options := sn.(*snapshotter).options
++	for _, opt := range options {
++		if opt == "index=off" {
++			t.Fatalf("configured index option overridden by auto-appended index=off (options: %v)", options)
++		}
++	}
++}
++
+ func TestOverlay(t *testing.T) {
+ 	testutil.RequiresRoot(t)
+ 	optTestCases := map[string][]Opt{

@@ -7,10 +7,21 @@
 # These are Linux static binaries shared into the guest VM via VirtioFS.
 #
 # IMPORTANT: dockerd, containerd, containerd-shim-runc-v2, runc, and
-# docker-init MUST come from the same Docker static package to guarantee
-# ABI/protocol compatibility. Do NOT mix versions from different sources.
+# docker-init MUST all be the same Docker release to guarantee ABI/protocol
+# compatibility. Do NOT mix versions from different sources.
+#
+# containerd is the one exception, and it does not mix versions: it is built
+# from the SAME upstream tag Docker bundles, plus one patch, by
+# `boot-assets build containerd` in the release workflow (see
+# src/build/containerd.rs for why, and for when to delete it). That is why
+# there is no [[binaries]] entry for it below — it enters the manifest from
+# the build job instead of from this file. When bumping the Docker version
+# here, bump DEFAULT_CONTAINERD_REF in src/cli/build/containerd.rs to the
+# containerd release the new Docker package bundles. Forgetting is not
+# silent: the build reads the version out of this package's own containerd
+# and refuses to run if it does not match the ref it is about to build.
 
-# --- Docker static package (all 4 from same tarball) ---
+# --- Docker static package (all from the same tarball) ---
 
 [[binaries]]
 name = "dockerd"
@@ -24,17 +35,8 @@ extract = "docker/dockerd"
 url = "https://download.docker.com/linux/static/stable/x86_64/docker-29.7.2.tgz"
 extract = "docker/dockerd"
 
-[[binaries]]
-name = "containerd"
-version = "29.7.2"
-
-[binaries.source.arm64]
-url = "https://download.docker.com/linux/static/stable/aarch64/docker-29.7.2.tgz"
-extract = "docker/containerd"
-
-[binaries.source.x86_64]
-url = "https://download.docker.com/linux/static/stable/x86_64/docker-29.7.2.tgz"
-extract = "docker/containerd"
+# containerd is built from source with our patch — see the header. It is
+# intentionally absent here.
 
 [[binaries]]
 name = "containerd-shim-runc-v2"
