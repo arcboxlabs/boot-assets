@@ -44,7 +44,6 @@ use anyhow::{Context, Result, anyhow, bail};
 use xshell::{Shell, cmd};
 
 use arcbox_boot::upstream::UpstreamSource;
-use arcbox_boot::util::set_executable;
 
 use super::sync_binaries::download_and_extract;
 use super::vendored::{append_binaries_json, apply_patches, assert_static_executable, stage_file};
@@ -78,7 +77,7 @@ pub struct BuildContainerdOpts {
     /// the manifest.
     pub version: String,
     /// Version compiled into the binary and reported by `containerd
-    /// --version`, e.g. `v2.3.3-arcbox.1`. Passed explicitly rather than left
+    /// --version`, e.g. `v2.3.3-arcbox.1-0.8.6`. Passed explicitly rather than left
     /// to the Makefile's `git describe`, which is unreliable in the shallow
     /// clone below — and, more importantly, so the running daemon's logs say
     /// out loud that this is not stock containerd.
@@ -141,9 +140,19 @@ pub fn build_containerd(opts: &BuildContainerdOpts) -> Result<()> {
 /// be internally consistent, and the guest would just be running a containerd
 /// its dockerd never shipped with.
 ///
-/// A comment asking for both to move together is not a check, so this asks
-/// Docker's own binary. `containerd --version` prints
-/// `containerd github.com/containerd/containerd/v2 <version> <revision>`.
+/// A comment asking for both to move together is not a check, so this asks the
+/// package itself — **without running it**. `go version -m` reads the build
+/// info Go embeds in every binary and prints, as its first record,
+/// `mod\tgithub.com/containerd/containerd/v2\t<version>`. Docker builds from a
+/// tagged checkout, so that version is the release tag.
+///
+/// Reading beats executing here for two reasons. It is a downloaded artifact
+/// running on a release runner that holds a write token, and nothing upstream
+/// of it verifies a digest — this is the one place in the job where a network
+/// artifact would get to execute for a reason unrelated to building it. And
+/// the module version is the more authoritative answer anyway: it comes from
+/// the VCS tag Go stamped at build time rather than from a string the program
+/// chooses to print.
 fn assert_bundled_by_docker(source: &UpstreamSource, source_ref: &str, work: &Path) -> Result<()> {
     let extract = source.extract.as_deref().ok_or_else(|| {
         anyhow!(
@@ -158,23 +167,40 @@ fn assert_bundled_by_docker(source: &UpstreamSource, source_ref: &str, work: &Pa
         .enable_all()
         .build()?;
     rt.block_on(download_and_extract(&source.url, extract, &vanilla))?;
-    set_executable(&vanilla)?;
 
-    let output = Command::new(&vanilla)
-        .arg("--version")
+    let output = Command::new("go")
+        .args(["version", "-m"])
+        .arg(&vanilla)
         .output()
-        .with_context(|| format!("failed to run {} --version", vanilla.display()))?;
+        .with_context(|| format!("failed to run `go version -m {}`", vanilla.display()))?;
     if !output.status.success() {
         bail!(
-            "{} --version exited with {}",
+            "`go version -m {}` exited with {}: {}",
             vanilla.display(),
-            output.status
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
         );
     }
     let reported = String::from_utf8_lossy(&output.stdout);
-    let bundled = reported.split_whitespace().nth(2).ok_or_else(|| {
-        anyhow!("could not read a version out of `containerd --version`: {reported:?}")
-    })?;
+    let bundled = reported
+        .lines()
+        .find_map(|line| {
+            let mut fields = line.split_whitespace();
+            (fields.next() == Some("mod")).then(|| fields.nth(1))?
+        })
+        .ok_or_else(|| {
+            anyhow!(
+                "no `mod` record in the build info of {}: {reported:?}",
+                vanilla.display()
+            )
+        })?;
+    if bundled == "(devel)" {
+        bail!(
+            "the pinned Docker package's containerd carries no module version \
+             (built from an untagged commit), so it cannot be checked against \
+             --source-ref {source_ref}"
+        );
+    }
 
     if bundled != source_ref {
         bail!(

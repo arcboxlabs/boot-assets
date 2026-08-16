@@ -59,8 +59,14 @@ pub struct BuildContainerdArgs {
     #[arg(long)]
     release_version: String,
     /// Version compiled into the binary (`containerd --version`). Defaults to
-    /// the source ref with an `-arcbox` suffix so a running daemon's logs say
-    /// plainly that this is not stock containerd.
+    /// the source ref plus the same patch-level and release suffixes the
+    /// manifest version carries.
+    ///
+    /// It has to say two things: that this is not stock containerd, and which
+    /// build it is. The bytes genuinely differ per release — that is why the
+    /// CDN key stamps one in — so a version stopping at `-arcbox.1` would
+    /// leave a guest unable to report which build it is running, losing
+    /// exactly the diagnostic this component argues hardest for keeping.
     #[arg(long)]
     internal_version: Option<String>,
     /// Append the containerd entry to this JSON manifest fragment.
@@ -78,9 +84,12 @@ impl BuildContainerdArgs {
             "{}-arcbox.{}-{}",
             docker.version, self.patch_level, self.release_version
         );
-        let internal_version = self
-            .internal_version
-            .unwrap_or_else(|| format!("{}-arcbox.{}", self.source_ref, self.patch_level));
+        let internal_version = self.internal_version.unwrap_or_else(|| {
+            format!(
+                "{}-arcbox.{}-{}",
+                self.source_ref, self.patch_level, self.release_version
+            )
+        });
         build_containerd(&BuildContainerdOpts {
             repo: self.repo,
             source_ref: self.source_ref,
