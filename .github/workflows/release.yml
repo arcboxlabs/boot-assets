@@ -189,8 +189,13 @@ jobs:
         include:
           - arch: arm64
             runner: ubuntu-24.04-arm
+          # Pinned like build-rootfs's, not `ubuntu-latest`: this build links
+          # cgo against the runner's static libc, so an image label that rolls
+          # to the next LTS would silently change the toolchain behind a binary
+          # whose whole design constraint is differing from Docker's by exactly
+          # one patch.
           - arch: x86_64
-            runner: ubuntu-latest
+            runner: ubuntu-24.04
     runs-on: ${{ matrix.runner }}
 
     steps:

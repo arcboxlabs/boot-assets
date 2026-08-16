@@ -38,10 +38,15 @@
 //! through.
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use xshell::{Shell, cmd};
 
+use arcbox_boot::upstream::UpstreamSource;
+use arcbox_boot::util::set_executable;
+
+use super::sync_binaries::download_and_extract;
 use super::vendored::{append_binaries_json, apply_patches, assert_static_executable, stage_file};
 
 /// Only `containerd` itself is built here. The shim stays on Docker's copy:
@@ -80,6 +85,10 @@ pub struct BuildContainerdOpts {
     pub internal_version: String,
     pub binaries_json: PathBuf,
     pub patches_dir: PathBuf,
+    /// Where to fetch the *vanilla* containerd Docker bundles, so the build
+    /// can prove it is about to build the same release. Derived from
+    /// `upstream.toml`'s dockerd entry — see [`assert_bundled_by_docker`].
+    pub vanilla_source: UpstreamSource,
 }
 
 pub fn build_containerd(opts: &BuildContainerdOpts) -> Result<()> {
@@ -87,6 +96,7 @@ pub fn build_containerd(opts: &BuildContainerdOpts) -> Result<()> {
     let work = tempfile::tempdir().context("failed to create containerd build temp dir")?;
     let source = work.path().join("containerd");
 
+    assert_bundled_by_docker(&opts.vanilla_source, &opts.source_ref, work.path())?;
     clone(&sh, &opts.repo, &opts.source_ref, &source)?;
     apply_patches(&sh, "containerd", &source, &opts.patches_dir)?;
     make_static(&sh, &source, &opts.internal_version)?;
@@ -117,6 +127,63 @@ pub fn build_containerd(opts: &BuildContainerdOpts) -> Result<()> {
     println!("    Output: {}", opts.output.display());
     println!("    Manifest: {}", opts.binaries_json.display());
 
+    Ok(())
+}
+
+/// Fails unless the Docker package pinned in `upstream.toml` really bundles
+/// the containerd release we are about to build.
+///
+/// The two are pinned independently — the Docker version lives in
+/// `upstream.toml`, the containerd tag in `DEFAULT_CONTAINERD_REF` — and a
+/// Docker bump that forgets the second would build the *old* containerd and
+/// publish it labelled as belonging to the new Docker package. Nothing
+/// downstream could tell: the manifest, the CDN key and the sha256 would all
+/// be internally consistent, and the guest would just be running a containerd
+/// its dockerd never shipped with.
+///
+/// A comment asking for both to move together is not a check, so this asks
+/// Docker's own binary. `containerd --version` prints
+/// `containerd github.com/containerd/containerd/v2 <version> <revision>`.
+fn assert_bundled_by_docker(source: &UpstreamSource, source_ref: &str, work: &Path) -> Result<()> {
+    let extract = source.extract.as_deref().ok_or_else(|| {
+        anyhow!(
+            "vanilla containerd source {} has no extract path",
+            source.url
+        )
+    })?;
+    let vanilla = work.join("vanilla-containerd");
+
+    println!("==> Checking which containerd {} bundles", source.url);
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    rt.block_on(download_and_extract(&source.url, extract, &vanilla))?;
+    set_executable(&vanilla)?;
+
+    let output = Command::new(&vanilla)
+        .arg("--version")
+        .output()
+        .with_context(|| format!("failed to run {} --version", vanilla.display()))?;
+    if !output.status.success() {
+        bail!(
+            "{} --version exited with {}",
+            vanilla.display(),
+            output.status
+        );
+    }
+    let reported = String::from_utf8_lossy(&output.stdout);
+    let bundled = reported.split_whitespace().nth(2).ok_or_else(|| {
+        anyhow!("could not read a version out of `containerd --version`: {reported:?}")
+    })?;
+
+    if bundled != source_ref {
+        bail!(
+            "the pinned Docker package bundles containerd {bundled}, but this build \
+             targets {source_ref}. Point --source-ref at {bundled} (and re-check that \
+             the patches still apply) when bumping the Docker version in upstream.toml."
+        );
+    }
+    println!("    bundled containerd is {bundled}, as expected");
     Ok(())
 }
 

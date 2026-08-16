@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, anyhow};
 use clap::Args;
 
-use arcbox_boot::upstream::UpstreamConfig;
+use arcbox_boot::upstream::{UpstreamConfig, UpstreamSource};
 
 use crate::build::containerd::{BuildContainerdOpts, build_containerd};
 
@@ -14,6 +14,8 @@ const DEFAULT_CONTAINERD_REPO: &str = "https://github.com/containerd/containerd.
 const DEFAULT_CONTAINERD_REF: &str = "v2.3.3";
 /// Directory (relative to CWD) of vendored `*.patch` files applied after clone.
 const DEFAULT_PATCHES_DIR: &str = "patches/containerd";
+/// Member of the Docker static tarball holding the containerd we replace.
+const VANILLA_CONTAINERD_MEMBER: &str = "docker/containerd";
 
 #[derive(Args)]
 pub struct BuildContainerdArgs {
@@ -71,10 +73,10 @@ pub struct BuildContainerdArgs {
 
 impl BuildContainerdArgs {
     pub fn run(self) -> Result<()> {
-        let package_version = docker_package_version(&self.upstream)?;
+        let docker = docker_package(&self.upstream, &self.arch)?;
         let version = format!(
-            "{package_version}-arcbox.{}-{}",
-            self.patch_level, self.release_version
+            "{}-arcbox.{}-{}",
+            docker.version, self.patch_level, self.release_version
         );
         let internal_version = self
             .internal_version
@@ -88,26 +90,50 @@ impl BuildContainerdArgs {
             internal_version,
             binaries_json: self.binaries_json,
             patches_dir: self.patches_dir,
+            vanilla_source: docker.vanilla_containerd,
         })
     }
 }
 
-/// Reads the Docker package version the guest runtime is pinned to.
+/// What the pinned Docker package contributes to this build.
+struct DockerPackage {
+    /// The package version the sibling guest binaries carry.
+    version: String,
+    /// Where to get the package's own containerd, for the compatibility check
+    /// in `build_containerd`.
+    vanilla_containerd: UpstreamSource,
+}
+
+/// Reads the Docker package the guest runtime is pinned to.
 ///
 /// `dockerd` is the anchor: it is the binary containerd has to be
 /// release-compatible with, and unlike containerd it is still declared in
-/// `upstream.toml`.
-fn docker_package_version(upstream: &Path) -> Result<String> {
+/// `upstream.toml`. Its source doubles as the source of the *vanilla*
+/// containerd — same tarball, different member — which is what lets the build
+/// check its own `--source-ref` against reality rather than trusting that
+/// whoever bumped Docker remembered to bump it too.
+fn docker_package(upstream: &Path, arch: &str) -> Result<DockerPackage> {
     let config = UpstreamConfig::from_file(upstream).map_err(anyhow::Error::msg)?;
-    config
+    let dockerd = config
         .binaries
         .iter()
         .find(|binary| binary.name == "dockerd")
-        .map(|binary| binary.version.clone())
         .ok_or_else(|| {
             anyhow!(
                 "no `dockerd` entry in {} to take the containerd package version from",
                 upstream.display()
             )
-        })
+        })?;
+    let source = dockerd
+        .source
+        .get(arch)
+        .ok_or_else(|| anyhow!("`dockerd` in {} has no {arch} source", upstream.display()))?;
+
+    Ok(DockerPackage {
+        version: dockerd.version.clone(),
+        vanilla_containerd: UpstreamSource {
+            extract: Some(VANILLA_CONTAINERD_MEMBER.to_string()),
+            ..source.clone()
+        },
+    })
 }
