@@ -9,8 +9,11 @@ use crate::build::containerd::{BuildContainerdOpts, build_containerd};
 
 const DEFAULT_CONTAINERD_REPO: &str = "https://github.com/containerd/containerd.git";
 /// The containerd release bundled in the Docker static package that
-/// `upstream.toml` pins. Bump this in the same change as the Docker version,
-/// or the guest gets a containerd its dockerd never shipped with.
+/// `upstream.toml` pins. Bump this in the same change as the Docker version.
+///
+/// Forgetting is caught rather than shipped: `assert_bundled_by_docker` reads
+/// the version out of that package's own containerd and refuses to build a
+/// different one.
 const DEFAULT_CONTAINERD_REF: &str = "v2.3.3";
 /// Directory (relative to CWD) of vendored `*.patch` files applied after clone.
 const DEFAULT_PATCHES_DIR: &str = "patches/containerd";
@@ -22,8 +25,9 @@ pub struct BuildContainerdArgs {
     /// containerd git repository URL.
     #[arg(long, default_value = DEFAULT_CONTAINERD_REPO)]
     repo: String,
-    /// containerd git tag to build. Must match the containerd bundled in the
-    /// Docker static package pinned by `upstream.toml`.
+    /// containerd git tag to build. Checked against the containerd actually
+    /// bundled in the Docker static package `upstream.toml` pins; a mismatch
+    /// aborts the build.
     #[arg(long, default_value = DEFAULT_CONTAINERD_REF)]
     source_ref: String,
     /// Target architecture (`arm64` or `x86_64`). The build is native, so this

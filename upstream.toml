@@ -17,8 +17,9 @@
 # there is no [[binaries]] entry for it below — it enters the manifest from
 # the build job instead of from this file. When bumping the Docker version
 # here, bump DEFAULT_CONTAINERD_REF in src/cli/build/containerd.rs to the
-# containerd release the new Docker package bundles, or the guest gets a
-# containerd its dockerd never shipped with.
+# containerd release the new Docker package bundles. Forgetting is not
+# silent: the build reads the version out of this package's own containerd
+# and refuses to run if it does not match the ref it is about to build.
 
 # --- Docker static package (all from the same tarball) ---
 
