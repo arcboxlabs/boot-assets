@@ -218,6 +218,14 @@ jobs:
           key: ${{ runner.os }}-${{ matrix.arch }}-containerd-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: ${{ runner.os }}-${{ matrix.arch }}-containerd-cargo-
 
+      # `make STATIC=1` links cgo against a static libc, so this needs a C
+      # toolchain and `libc.a` — declared rather than inherited from whatever
+      # the runner image happens to ship.
+      - name: Install containerd build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential
+
       - name: Build CLI
         run: cargo build --release --features build --no-default-features
 
