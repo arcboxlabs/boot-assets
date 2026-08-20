@@ -209,7 +209,7 @@ jobs:
       # (read out of that binary), so the toolchain is not a second way our
       # build can differ from theirs.
       - name: Install Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v7
         with:
           go-version: "1.26.5"
 
