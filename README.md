@@ -178,6 +178,17 @@ Pipeline stages:
 4. **Merge** — merges per-arch manifests into unified multi-target manifest
 5. **Release** — publishes to GitHub Releases and Cloudflare R2 (served at boot.arcboxcdn.com)
 
+### Republishing a released version
+
+`.github/workflows/republish.yml` (manual dispatch) rebuilds the CDN layout of
+an existing release and publishes it to R2 without rebuilding: kernel, rootfs
+and `manifest.json` come from the GitHub Release, upstream runtime binaries
+are re-downloaded from the tag's `upstream.toml`, and FEX plus the patched
+containerd come from the release run's `boot-assets-release-*` artifacts
+(pass that run's id; they expire after 14 days). Every object is checked
+against the manifest's sha256 before upload, because the daemon pins that
+manifest by hash and a rebuild would change it.
+
 ### Local build
 
 Prerequisites:
