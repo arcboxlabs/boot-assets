@@ -238,9 +238,9 @@ jobs:
       # upstream.toml's dockerd pin + `-arcbox.{patch-level}` + the release
       # version. The release stamp is what makes the CDN key unique per
       # release, which this workflow already learned the hard way for FEX:
-      # these builds are not bit-reproducible, the B2 sync is --size-only, and
-      # Cloudflare caches for hours, so a reused key serves bytes that no
-      # longer match the manifest's sha256.
+      # these builds are not bit-reproducible, the CDN publish skips keys whose
+      # size and mtime already match, and Cloudflare caches for hours, so a
+      # reused key serves bytes that no longer match the manifest's sha256.
       - name: Build containerd
         run: |
           ./target/release/boot-assets build containerd \
@@ -291,9 +291,10 @@ jobs:
         run: cargo build --release --features build --no-default-features
 
       # The CDN key (bin/FEX/{version}/arm64/FEX) must be unique per release:
-      # FEX builds are not bit-reproducible, the B2 sync uses --size-only, and
-      # Cloudflare caches objects for hours — reusing a key for different bytes
-      # leaves the CDN serving a binary that no longer matches the manifest.
+      # FEX builds are not bit-reproducible, the CDN publish skips keys whose
+      # size and mtime already match, and Cloudflare caches objects for hours —
+      # reusing a key for different bytes leaves the CDN serving a binary that
+      # no longer matches the manifest.
       - name: Build FEX runtime bundle
         run: |
           SOURCE_REF="FEX-2605"
@@ -540,7 +541,7 @@ jobs:
           prerelease: ${{ contains(needs.resolve-vars.outputs.version, 'alpha') || contains(needs.resolve-vars.outputs.version, 'beta') }}
 
   # ==========================================================================
-  # Stage 5: Upload boot assets to Backblaze B2.
+  # Stage 5: Publish boot assets to Cloudflare R2 (served at boot.arcboxcdn.com).
   #
   # CDN layout (boot.arcboxcdn.com):
   #   ├── latest.json                     # {"version":"x.y.z"}
@@ -554,8 +555,8 @@ jobs:
   #   └── bin/                            # managed by sync-binaries.yml
   #       └── {name}/{version}/{arch}/{name}
   # ==========================================================================
-  upload-b2:
-    name: Upload to B2
+  upload-cdn:
+    name: Upload to R2
     needs: [resolve-vars, assemble, merge-manifest]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'repository_dispatch' || github.event_name == 'workflow_dispatch'
@@ -582,7 +583,7 @@ jobs:
       - name: Prepare upload directory structure
         run: |
           VERSION="${{ needs.resolve-vars.outputs.version }}"
-          STAGING="b2-staging"
+          STAGING="cdn-staging"
 
           # asset/v{version}/{arch}/kernel + rootfs.erofs
           for ARCH in arm64 x86_64; do
@@ -605,35 +606,21 @@ jobs:
           # latest.json
           printf '{"version":"%s"}\n' "$VERSION" > "$STAGING/latest.json"
 
-          echo "=== B2 staging ==="
+          echo "=== CDN staging ==="
           find "$STAGING" -type f | sort
 
-      - name: Upload to Backblaze B2
-        run: |
-          aws s3 sync b2-staging/ "s3://${{ secrets.B2_BUCKET }}/" \
-            --endpoint-url "https://s3.${{ secrets.B2_REGION }}.backblazeb2.com" \
-            --size-only
-
-          # Force-upload latest.json (size-only skips it when only the
-          # version string changes but the file size stays the same).
-          aws s3 cp b2-staging/latest.json "s3://${{ secrets.B2_BUCKET }}/latest.json" \
-            --endpoint-url "https://s3.${{ secrets.B2_REGION }}.backblazeb2.com"
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.B2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.B2_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ secrets.B2_REGION }}
-
-      - name: Verify CDN
-        run: |
-          VERSION="${{ needs.resolve-vars.outputs.version }}"
-          sleep 5
-          for URL in \
-            "https://boot.arcboxcdn.com/asset/v${VERSION}/manifest.json" \
-            "https://boot.arcboxcdn.com/asset/v${VERSION}/arm64/kernel" \
-            "https://boot.arcboxcdn.com/latest.json"; do
-            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 10 "$URL")
-            echo "CDN check: $URL -> HTTP $HTTP_STATUS"
-            if [ "$HTTP_STATUS" != "200" ]; then
-              echo "::warning::CDN returned HTTP $HTTP_STATUS for $URL"
-            fi
-          done
+      # Blobs first, latest.json last, so a reader that sees the new pointer
+      # always finds the version it points at.
+      - name: Publish to R2
+        uses: arcboxlabs/actions/r2-publish@v1
+        with:
+          account-id: ${{ vars.R2_ACCOUNT_ID }}
+          access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          bucket: arcboxcdn-boot
+          source-dir: cdn-staging
+          index-files: latest.json
+          verify-urls: |
+            https://boot.arcboxcdn.com/asset/v${{ needs.resolve-vars.outputs.version }}/manifest.json
+            https://boot.arcboxcdn.com/asset/v${{ needs.resolve-vars.outputs.version }}/arm64/kernel
+            https://boot.arcboxcdn.com/latest.json

@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   sync:
-    name: Sync Binaries to B2
+    name: Sync Binaries to R2
     runs-on: ubuntu-latest
 
     steps:
@@ -42,17 +42,18 @@ jobs:
             --config upstream.toml \
             --output dist/bin \
             --cdn-base-url "https://boot.arcboxcdn.com"
-
-      - name: Upload to Backblaze B2
-        run: |
+          # Nothing new to sync still leaves a directory for the publish step.
           mkdir -p dist/bin
-          aws s3 sync dist/bin/ "s3://${{ secrets.B2_BUCKET }}/bin/" \
-            --endpoint-url "https://s3.${{ secrets.B2_REGION }}.backblazeb2.com" \
-            --size-only
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.B2_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.B2_SECRET_ACCESS_KEY }}
-          AWS_REGION: ${{ secrets.B2_REGION }}
+
+      - name: Publish to R2
+        uses: arcboxlabs/actions/r2-publish@v1
+        with:
+          account-id: ${{ vars.R2_ACCOUNT_ID }}
+          access-key-id: ${{ secrets.R2_ACCESS_KEY_ID }}
+          secret-access-key: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          bucket: arcboxcdn-boot
+          source-dir: dist/bin
+          destination: bin
 
       - name: Verify CDN
         run: |
