@@ -21,21 +21,21 @@
 //!
 //! # Fidelity
 //!
-//! Docker ships **vanilla** upstream containerd — the revision its 29.7.2
-//! binary reports is exactly what the `v2.3.3` tag dereferences to. So building
-//! the same tag with `make STATIC=1` (which is what Docker's static package
-//! uses: its binary carries cgo markers and no libc resolver symbols, matching
-//! the `osusergo netgo static_build` tags that recipe adds) yields a binary
-//! that differs from Docker's by exactly our patch. Keeping it that way is the
-//! point: when containerd misbehaves, "is it the patch or the build?" has to
-//! stay answerable.
+//! Docker ships **vanilla** upstream containerd — the revision its 29.8.2
+//! binary reports is exactly what the `v2.3.6` tag dereferences to. Its build
+//! info (`go version -m`) shows containerd's static recipe, the `osusergo netgo
+//! static_build` tags and `-extldflags -static` that `make STATIC=1` adds, with
+//! `CGO_ENABLED=0`. We run `make STATIC=1` on the same tag with CGO left on, so
+//! our binary differs from Docker's in two ways only: the patch, and cgo.
+//! Keeping that list short is the point: when containerd misbehaves, "is it the
+//! patch or the build?" has to stay answerable.
 //!
-//! CGO stays enabled for the same reason. On Linux the only cgo-gated code in
+//! CGO stays enabled on purpose. On Linux the only cgo-gated code in
 //! containerd is the btrfs snapshotter, which we do not currently select
-//! (dockerd picks `overlayfs` even though the guest's docker volume is btrfs) —
-//! but dropping it would be a second deviation from Docker's build bought for
-//! nothing, and it would quietly close a door the ArcBox NFS work may yet walk
-//! through.
+//! (dockerd picks `overlayfs` even though the guest's docker volume is btrfs),
+//! but compiling it out would quietly close a door the ArcBox NFS work may yet
+//! walk through. The price is the cgo half of the build: a C toolchain, and
+//! the runner's static libc linked into the binary.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -227,11 +227,11 @@ fn clone(sh: &Shell, repo: &str, source_ref: &str, source: &Path) -> Result<()> 
 ///
 /// `STATIC=1` is what adds `osusergo netgo static_build` and `-extldflags
 /// -static`; leaving CGO at its default keeps the btrfs snapshotter compiled
-/// in, matching Docker's package. `VERSION` is overridden (the Makefile
-/// declares it with `?=`) so the shallow clone's `git describe` never decides
-/// it; `REVISION` is deliberately left alone so it keeps reporting the
-/// upstream commit, with the Makefile's own `.m` dirty marker appended by the
-/// applied patch.
+/// in, which Docker's `CGO_ENABLED=0` package lacks (see the module doc).
+/// `VERSION` is overridden (the Makefile declares it with `?=`) so the shallow
+/// clone's `git describe` never decides it; `REVISION` is deliberately left
+/// alone so it keeps reporting the upstream commit, with the Makefile's own
+/// `.m` dirty marker appended by the applied patch.
 fn make_static(sh: &Shell, source: &Path, internal_version: &str) -> Result<()> {
     println!("==> Building containerd (make STATIC=1)");
     let target = format!("bin/{CONTAINERD_BINARY}");

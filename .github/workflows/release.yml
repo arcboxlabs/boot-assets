@@ -178,8 +178,9 @@ jobs:
   # yet. src/build/containerd.rs holds the rationale and the delete criteria.
   #
   # Native per-arch runners rather than cross-compilation: the build keeps CGO
-  # enabled to match Docker's own `make STATIC=1` recipe, and cross-building
-  # cgo would mean carrying a static C toolchain per target for no gain.
+  # enabled for the btrfs snapshotter (src/build/containerd.rs says why), and
+  # cross-building cgo would mean carrying a static C toolchain per target for
+  # no gain.
   # ==========================================================================
   build-containerd:
     name: Build containerd (${{ matrix.arch }})
@@ -192,8 +193,7 @@ jobs:
           # Pinned like build-rootfs's, not `ubuntu-latest`: this build links
           # cgo against the runner's static libc, so an image label that rolls
           # to the next LTS would silently change the toolchain behind a binary
-          # whose whole design constraint is differing from Docker's by exactly
-          # one patch.
+          # meant to differ from Docker's only by the patch and cgo.
           - arch: x86_64
             runner: ubuntu-24.04
     runs-on: ${{ matrix.runner }}
