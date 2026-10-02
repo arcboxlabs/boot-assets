@@ -218,7 +218,7 @@ Output files are written to `dist/`.
 ```
 / (EROFS, read-only, LZ4HC compressed)
 ├── bin/
-│   └── busybox          # Static busybox (+ symlinks: sh, mount, mkdir, ...)
+│   └── busybox          # Static busybox (+ a symlink for every applet)
 ├── sbin/
 │   ├── init             # busybox init: early mounts → mount VirtioFS → run agent init
 │   ├── mkfs.btrfs       # Btrfs formatter (first-boot data disk)

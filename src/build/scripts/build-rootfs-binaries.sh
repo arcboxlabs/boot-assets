@@ -11,9 +11,11 @@ apk add --no-cache \
   busybox-static ca-certificates \
   {{ nfs_packages }}
 
-# 1. busybox (pre-built static from Alpine)
+# 1. busybox (pre-built static from Alpine), plus the applet names the rootfs
+#    builder links into /bin
 cp /bin/busybox.static /out/busybox
-echo "[1/{{ total }}] busybox (static) OK"
+/out/busybox --list > /out/busybox.applets
+echo "[1/{{ total }}] busybox (static, $(wc -l < /out/busybox.applets) applets) OK"
 
 # 2. mkfs.btrfs (static build from source; tag tarball + retries — a git
 # clone cannot resume or retry after a mid-transfer reset)

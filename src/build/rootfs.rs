@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -8,10 +10,9 @@ use xshell::{Shell, cmd};
 
 use arcbox_boot::util::{copy_executable, render_template, set_executable};
 
-const BUSYBOX_SYMLINKS: &[&str] = &[
-    "sh", "mount", "umount", "mkdir", "cat", "echo", "sleep", "ln", "chmod", "chown", "cp", "mv",
-    "rm", "ls", "ip", "hostname", "sysctl",
-];
+/// `busybox --list` output that `build-rootfs-binaries.sh` stages next to the
+/// binary, one applet name per line.
+const BUSYBOX_APPLETS: &str = "busybox.applets";
 
 const IPTABLES_SYMLINKS: &[&str] = &[
     "iptables-save",
@@ -243,13 +244,11 @@ fn build_erofs_image_with_docker(
 }
 
 fn build_rootfs_tree(rootfs: &Path, staging: &Path) -> Result<()> {
-    // /bin — busybox + symlinks
+    // /bin — busybox; its applet links come last, once every file the rootfs
+    // ships is in place.
     let bin_dir = rootfs.join("bin");
     fs::create_dir_all(&bin_dir)?;
     copy_executable(&staging.join("busybox"), &bin_dir.join("busybox"))?;
-    for cmd in BUSYBOX_SYMLINKS {
-        fs::os::unix::fs::symlink("busybox", bin_dir.join(cmd))?;
-    }
 
     // /sbin — system binaries
     let sbin_dir = rootfs.join("sbin");
@@ -297,6 +296,45 @@ fn build_rootfs_tree(rootfs: &Path, staging: &Path) -> Result<()> {
     // boot sequence.
     write_boot_sequence(rootfs)?;
 
+    let applets = fs::read_to_string(staging.join(BUSYBOX_APPLETS))?;
+    link_busybox_applets(rootfs, applets.lines())?;
+
+    Ok(())
+}
+
+/// Links every applet busybox is built with into `/bin`, so the guest's
+/// standard `PATH` carries the whole busybox userland.
+///
+/// A name the rootfs already ships in `/bin` or `/sbin` keeps its own file: a
+/// real binary (or the `/sbin/init` link) wins over the applet whatever the
+/// order of `PATH`.
+fn link_busybox_applets<'a>(
+    rootfs: &Path,
+    applets: impl IntoIterator<Item = &'a str>,
+) -> Result<()> {
+    let bin_dir = rootfs.join("bin");
+    let sbin_dir = rootfs.join("sbin");
+    let mut shipped = HashSet::new();
+    for dir in [&bin_dir, &sbin_dir] {
+        for entry in fs::read_dir(dir)? {
+            shipped.insert(entry?.file_name());
+        }
+    }
+
+    let mut linked = 0;
+    let mut kept = Vec::new();
+    for applet in applets {
+        if shipped.contains(OsStr::new(applet)) {
+            kept.push(applet);
+        } else {
+            fs::os::unix::fs::symlink("busybox", bin_dir.join(applet))?;
+            linked += 1;
+        }
+    }
+    println!("    Linked {linked} busybox applets into /bin");
+    if !kept.is_empty() {
+        println!("    Kept the rootfs's own {}", kept.join(", "));
+    }
     Ok(())
 }
 
@@ -337,9 +375,13 @@ pub(crate) fn mkfs_erofs_block_flag() -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use fs_err as fs;
 
-    use super::{inittab, mkfs_erofs_block_flag, rcs_script, write_boot_sequence};
+    use super::{
+        inittab, link_busybox_applets, mkfs_erofs_block_flag, rcs_script, write_boot_sequence,
+    };
 
     #[test]
     fn mkfs_erofs_block_flag_uses_4k_syntax() {
@@ -384,6 +426,37 @@ mod tests {
         assert!(tab.contains("::respawn:/arcbox/bin/arcbox-agent"));
         assert!(tab.contains("::ctrlaltdel:/bin/busybox poweroff"));
         assert!(!tab.contains('\0'));
+    }
+
+    /// Every listed applet gets a `/bin` link to busybox, except a name the
+    /// rootfs already ships, whose own file must come through untouched.
+    #[test]
+    fn link_busybox_applets_keeps_the_rootfs_own_files() {
+        let root = tempfile::tempdir().unwrap();
+        let rootfs = root.path();
+        fs::create_dir_all(rootfs.join("bin")).unwrap();
+        fs::create_dir_all(rootfs.join("sbin")).unwrap();
+        fs::write(rootfs.join("bin/busybox"), "").unwrap();
+        fs::write(rootfs.join("sbin/iptables"), "real").unwrap();
+        std::os::unix::fs::symlink("/bin/busybox", rootfs.join("sbin/init")).unwrap();
+
+        link_busybox_applets(rootfs, ["sh", "ps", "init", "iptables"]).unwrap();
+
+        for applet in ["sh", "ps"] {
+            let link = rootfs.join("bin").join(applet);
+            assert_eq!(fs::read_link(&link).unwrap(), Path::new("busybox"));
+        }
+        for shipped in ["init", "iptables"] {
+            assert!(fs::symlink_metadata(rootfs.join("bin").join(shipped)).is_err());
+        }
+        assert_eq!(
+            fs::read_to_string(rootfs.join("sbin/iptables")).unwrap(),
+            "real"
+        );
+        assert_eq!(
+            fs::read_link(rootfs.join("sbin/init")).unwrap(),
+            Path::new("/bin/busybox")
+        );
     }
 
     /// Assembles the boot sequence into a real temp tree and asserts the on-disk
