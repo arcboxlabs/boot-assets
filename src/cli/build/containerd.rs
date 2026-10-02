@@ -14,7 +14,7 @@ const DEFAULT_CONTAINERD_REPO: &str = "https://github.com/containerd/containerd.
 /// Forgetting is caught rather than shipped: `assert_bundled_by_docker` reads
 /// the version out of that package's own containerd and refuses to build a
 /// different one.
-const DEFAULT_CONTAINERD_REF: &str = "v2.3.3";
+const DEFAULT_CONTAINERD_REF: &str = "v2.3.6";
 /// Directory (relative to CWD) of vendored `*.patch` files applied after clone.
 const DEFAULT_PATCHES_DIR: &str = "patches/containerd";
 /// Member of the Docker static tarball holding the containerd we replace.

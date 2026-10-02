@@ -205,13 +205,13 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      # Pinned to the Go release Docker built its own containerd 29.7.2 with
+      # Pinned to the Go release Docker built its own containerd 29.8.2 with
       # (read out of that binary), so the toolchain is not a second way our
       # build can differ from theirs.
       - name: Install Go
         uses: actions/setup-go@v6
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.8"
 
       - name: Cache cargo
         uses: actions/cache@v6
