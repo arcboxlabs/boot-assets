@@ -31,6 +31,7 @@ const IPTABLES_SYMLINKS: &[&str] = &[
 const CORE_STATIC_BINARIES: &[&str] = &[
     "busybox",
     "mkfs.btrfs",
+    "btrfs",
     "iptables",
     "mkfs.erofs",
     "mkfs.ext4",
@@ -85,6 +86,14 @@ fn rcs_script() -> Result<String> {
         context! {
             AGENT_BIN => AGENT_BIN,
         },
+    )
+}
+
+fn storage_recovery_script() -> Result<String> {
+    render_template(
+        "storage-recovery.sh",
+        include_str!("scripts/storage-recovery.sh"),
+        context! { AGENT_BIN => AGENT_BIN },
     )
 }
 
@@ -197,7 +206,7 @@ pub fn build_rootfs(opts: &BuildRootfsOpts) -> Result<()> {
     println!("    Compression: {}", opts.compression);
     println!("    Block size: {} bytes", EROFS_BLOCK_SIZE);
     println!(
-        "    Contents: busybox + mkfs.btrfs + iptables-legacy + mkfs.erofs + nfs-utils + CA certs + busybox-init boot sequence"
+        "    Contents: busybox + Btrfs/ext4 storage tools + iptables-legacy + mkfs.erofs + nfs-utils + CA certs + busybox-init boot sequence"
     );
     println!("    Core boot tools are static; packaged utilities include required shared libs");
 
@@ -254,6 +263,7 @@ fn build_rootfs_tree(rootfs: &Path, staging: &Path) -> Result<()> {
     let sbin_dir = rootfs.join("sbin");
     fs::create_dir_all(&sbin_dir)?;
     copy_executable(&staging.join("mkfs.btrfs"), &sbin_dir.join("mkfs.btrfs"))?;
+    copy_executable(&staging.join("btrfs"), &sbin_dir.join("btrfs"))?;
     copy_executable(&staging.join("iptables"), &sbin_dir.join("iptables"))?;
     copy_executable(&staging.join("mkfs.erofs"), &sbin_dir.join("mkfs.erofs"))?;
     copy_executable(&staging.join("mkfs.ext4"), &sbin_dir.join("mkfs.ext4"))?;
@@ -357,6 +367,12 @@ fn write_boot_sequence(rootfs: &Path) -> Result<()> {
     fs::write(etc_dir.join("inittab"), inittab())?;
     fs::write(init_d_dir.join("rcS"), rcs_script()?)?;
     set_executable(&init_d_dir.join("rcS"))?;
+
+    fs::write(
+        sbin_dir.join("arcbox-storage-recovery"),
+        storage_recovery_script()?,
+    )?;
+    set_executable(&sbin_dir.join("arcbox-storage-recovery"))?;
 
     // Machine boot shim: PID 1 for distro machines, selected by the host via
     // `init=/sbin/arcbox-machine-init` (see the script header for the
@@ -491,6 +507,10 @@ mod tests {
         assert!(body.contains("/arcbox/bin/arcbox-agent init"));
         let mode = fs::metadata(&rcs).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o755, "rcS must be executable");
+
+        let recovery = root.join("sbin/arcbox-storage-recovery");
+        let mode = fs::metadata(&recovery).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o755, "storage recovery must be executable");
 
         // /sbin/arcbox-machine-init is executable and honors the machine
         // cmdline contract (keys owned by arcbox's arcbox-constants).
