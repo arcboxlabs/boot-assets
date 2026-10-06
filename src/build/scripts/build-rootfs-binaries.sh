@@ -1,7 +1,7 @@
 set -e
 
 apk add --no-cache \
-  build-base curl autoconf automake libtool pkgconf \
+  build-base curl autoconf automake libtool pkgconf patch \
   linux-headers \
   util-linux-dev util-linux-static \
   zlib-dev zlib-static \
@@ -78,6 +78,9 @@ curl -sfL --retry 8 --retry-all-errors -o e2fsprogs.tar.gz \
   https://github.com/tytso/e2fsprogs/archive/refs/tags/v1.47.3.tar.gz
 tar -xzf e2fsprogs.tar.gz
 cd e2fsprogs-1.47.3
+patch -p1 <<'ARCBOX_E2FSPROGS_PATCH'
+{{ e2fsprogs_patch }}
+ARCBOX_E2FSPROGS_PATCH
 LDFLAGS="-static" ./configure \
   --enable-libuuid --enable-libblkid \
   --disable-nls --disable-uuidd --disable-fsck \
@@ -92,6 +95,10 @@ cp misc/mke2fs /out/mkfs.ext4
 cp e2fsck/e2fsck /out/e2fsck
 echo "[6/{{ total }}] mkfs.ext4 (static) OK"
 echo "[7/{{ total }}] e2fsck (static) OK"
+
+sh -s /out <<'ARCBOX_E2FSCK_REGRESSION'
+{{ e2fsck_regression }}
+ARCBOX_E2FSCK_REGRESSION
 
 {{ nfs_stage_script }}
 

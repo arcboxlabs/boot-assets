@@ -1,0 +1,20 @@
+Subject: [PATCH] e2fsck: preserve errors found before read-only passes
+
+In e2fsprogs 1.47.3, check_super_block clears filesystem validity when a
+group descriptor checksum is invalid. The second ext2fs_mark_valid call
+discards that result before the main passes, so e2fsck -fn can report the
+checksum error and still exit successfully.
+
+Keep the initial validity state when -n disables repairs. The first
+initialization before check_super_block remains unchanged. Repair modes
+retain the second reset because their passes can repair the detected errors.
+
+--- a/e2fsck/unix.c
++++ b/e2fsck/unix.c
+@@ -1898 +1898 @@
+-	 * Mark the system as valid, 'til proven otherwise
++	 * Preserve errors found before the main passes when fixes are disabled.
+@@ -1900 +1900,2 @@
+-	ext2fs_mark_valid(fs);
++	if (!(ctx->options & E2F_OPT_NO))
++		ext2fs_mark_valid(fs);

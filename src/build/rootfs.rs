@@ -174,6 +174,8 @@ pub fn build_rootfs(opts: &BuildRootfsOpts) -> Result<()> {
             nfs_stage_script,
             nfs_out_paths,
             nfs_binaries_list,
+            e2fsprogs_patch => include_str!("../../patches/e2fsprogs/0001-preserve-readonly-errors.patch"),
+            e2fsck_regression => include_str!("scripts/check-e2fsck-readonly.sh"),
         },
     )?;
 

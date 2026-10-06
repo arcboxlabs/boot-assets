@@ -237,6 +237,14 @@ Output files are written to `dist/`.
 
 The storage tools run without a mounted data disk. Use `btrfs check --readonly` and `e2fsck -fn` on unmounted recovery copies for diagnosis. Preserve the data and metadata images together before attempting repairs; a mounted filesystem or a successful mount alone is not a consistency check.
 
+The rootfs carries [an e2fsprogs 1.47.3 patch](patches/e2fsprogs/0001-preserve-readonly-errors.patch) that preserves errors detected before the main passes when `-n` disables repairs. Without the patch, `e2fsck -fn` can report an invalid group descriptor checksum and exit `0`. Repair modes keep their upstream behavior.
+
+Every rootfs build runs a [read-only regression check](src/build/scripts/check-e2fsck-readonly.sh) with the built tools. A new 64 MiB ext4 image with 4 KiB blocks and metadata checksums must exit `0`; a copy with one flipped group descriptor checksum bit must exit `4`. Both checks must preserve the full image SHA-256. To rerun the check on Linux, pass the directory containing the produced tools:
+
+```bash
+sh src/build/scripts/check-e2fsck-readonly.sh /path/to/rootfs/sbin
+```
+
 Recovery VMs must use `init=/sbin/arcbox-storage-recovery arcbox.storage_recovery=1`. This entry mounts pseudo-filesystems and the agent share, then executes `arcbox-agent storage-recovery`. The entry rejects an agent without the `arcbox-storage-recovery-v1` capability marker before executing the agent. An incompatible image or agent must stop recovery; recovery must not fall back to normal initialization.
 
 ## FEX runtime
