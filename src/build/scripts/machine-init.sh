@@ -141,7 +141,7 @@ $bb chroot "$newroot" /bin/busybox sh -c \
 # lands on the distro's /mnt and is lazily detached. pivot_root needs that
 # directory to exist, and not every image ships one (NixOS's does not).
 cd "$newroot" || fail 'cd newroot failed'
-$bb mkdir -p mnt
+$bb mkdir -p mnt || fail 'mkdir mnt failed'
 $bb pivot_root . mnt || fail 'pivot_root failed'
 $bb umount -l /mnt 2>/dev/null || true
 exec $bb chroot . /sbin/init </dev/console >/dev/console 2>&1
