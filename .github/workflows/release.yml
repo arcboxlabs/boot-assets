@@ -525,7 +525,7 @@ jobs:
           body: |
             ## Boot Assets v${{ needs.resolve-vars.outputs.version }}
 
-            Schema version 7 — multi-target manifest, kernel + EROFS rootfs.
+            Multi-target manifest, kernel, and EROFS rootfs. See `manifest.json` for the schema version.
 
             ### Files
             - `boot-assets-arm64-v${{ needs.resolve-vars.outputs.version }}.tar.gz` (+ `.sha256`)
