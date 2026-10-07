@@ -11,7 +11,7 @@ Each release publishes per-architecture tarballs plus a unified multi-target man
 The tarball contains:
 
 1. `kernel` — pre-built Linux kernel from [`arcboxlabs/kernel`](https://github.com/arcboxlabs/kernel) (all drivers built-in, `CONFIG_MODULES=n`)
-2. `rootfs.erofs` — minimal read-only rootfs (busybox + mkfs.btrfs + iptables-legacy + CA certs)
+2. `rootfs.erofs` — minimal read-only rootfs (busybox + Btrfs/ext4 storage tools + iptables-legacy + CA certs)
 3. `manifest.json` — per-arch manifest (merged into unified manifest at release time)
 
 No agent binary in the boot tarball, and no initramfs.
@@ -221,7 +221,11 @@ Output files are written to `dist/`.
 │   └── busybox          # Static busybox (+ a symlink for every applet)
 ├── sbin/
 │   ├── init             # busybox init: early mounts → mount VirtioFS → run agent init
+│   ├── arcbox-storage-recovery # Dedicated recovery PID 1
 │   ├── mkfs.btrfs       # Btrfs formatter (first-boot data disk)
+│   ├── btrfs            # Btrfs inspection and data recovery tools
+│   ├── mkfs.ext4        # ext4 formatter (first-boot metadata disk)
+│   ├── e2fsck           # ext4 filesystem checker
 │   ├── iptables         # iptables-legacy (Docker bridge networking)
 │   └── (symlinks)       # iptables-save, iptables-restore, ip6tables, ...
 ├── lib/
@@ -230,6 +234,18 @@ Output files are written to `dist/`.
 │   └── ca-certificates.crt
 └── (mount points)       # tmp/ run/ proc/ sys/ dev/ mnt/ arcbox/ Users/ etc/ var/
 ```
+
+The storage tools run without a mounted data disk. Use `btrfs check --readonly` and `e2fsck -fn` on unmounted recovery copies for diagnosis. Preserve the data and metadata images together before attempting repairs; a mounted filesystem or a successful mount alone is not a consistency check.
+
+The rootfs carries [an e2fsprogs 1.47.3 patch](patches/e2fsprogs/0001-preserve-readonly-errors.patch) that preserves errors detected before the main passes when `-n` disables repairs. Without the patch, `e2fsck -fn` can report an invalid group descriptor checksum and exit `0`. Repair modes keep their upstream behavior.
+
+Every rootfs build runs a [read-only regression check](src/build/scripts/check-e2fsck-readonly.sh) with the built tools. A new 64 MiB ext4 image with 4 KiB blocks and metadata checksums must exit `0`; a copy with one flipped group descriptor checksum bit must exit `4`. Both checks must preserve the full image SHA-256. To rerun the check on Linux, pass the directory containing the produced tools:
+
+```bash
+sh src/build/scripts/check-e2fsck-readonly.sh /path/to/rootfs/sbin
+```
+
+Recovery VMs must use `init=/sbin/arcbox-storage-recovery arcbox.storage_recovery=1`. This entry mounts pseudo-filesystems and the agent share, then executes `arcbox-agent storage-recovery`. The entry rejects an agent without the `arcbox-storage-recovery-v1` capability marker before executing the agent. An incompatible image or agent must stop recovery; recovery must not fall back to normal initialization.
 
 ## FEX runtime
 
