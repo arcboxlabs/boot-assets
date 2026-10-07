@@ -392,6 +392,9 @@ pub(crate) fn mkfs_erofs_block_flag() -> String {
 }
 
 #[cfg(test)]
+mod storage_recovery_tests;
+
+#[cfg(test)]
 mod tests {
     use std::path::Path;
 
