@@ -45,8 +45,10 @@ const NFS_BINARIES: &[&str] = &["rpc.nfsd", "exportfs", "rpc.mountd"];
 const EROFS_BLOCK_SIZE: &str = "4096";
 const EROFS_XATTR_TOLERANCE: &str = "-1";
 
+// The host /private VirtioFS share needs its mountpoint before the EROFS root
+// is mounted read-only; the guest cannot create it during initialization.
 const MOUNT_DIRS: &[&str] = &[
-    "tmp", "run", "proc", "sys", "dev", "mnt", "arcbox", "Users", "etc", "var", "export",
+    "tmp", "run", "proc", "sys", "dev", "mnt", "arcbox", "Users", "private", "etc", "var", "export",
 ];
 
 /// Path to the staged guest agent on the VirtioFS `arcbox` share.
