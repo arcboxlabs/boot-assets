@@ -6,7 +6,7 @@ name: Republish CDN
 #
 #   kernel, rootfs.erofs, manifest.json   the GitHub Release (tarballs + merged manifest)
 #   upstream runtime binaries              re-downloaded by `sync-binaries` from the tag's upstream.toml
-#   FEX, patched containerd                the release run's boot-assets-release-<arch> artifacts
+#   FEX (and containerd up to v0.8.10)     the release run's boot-assets-release-<arch> artifacts
 #                                          (built in-workflow, 14-day retention) — pass that run's id
 #
 # Every object is checked against the manifest's sha256 before anything is
@@ -23,7 +23,7 @@ on:
       run_id:
         description: >-
           Release workflow run whose boot-assets-release-* artifacts carry the
-          in-workflow-built binaries (FEX, containerd). Required while the
+          in-workflow-built binaries (FEX, and containerd up to v0.8.10). Required while the
           manifest lists such binaries.
         required: false
         type: string

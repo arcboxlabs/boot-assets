@@ -183,11 +183,11 @@ Pipeline stages:
 `.github/workflows/republish.yml` (manual dispatch) rebuilds the CDN layout of
 an existing release and publishes it to R2 without rebuilding: kernel, rootfs
 and `manifest.json` come from the GitHub Release, upstream runtime binaries
-are re-downloaded from the tag's `upstream.toml`, and FEX plus the patched
-containerd come from the release run's `boot-assets-release-*` artifacts
-(pass that run's id; they expire after 14 days). Every object is checked
-against the manifest's sha256 before upload, because the daemon pins that
-manifest by hash and a rebuild would change it.
+are re-downloaded from the tag's `upstream.toml`, and FEX (plus the patched
+containerd of v0.8.10 and earlier) comes from the release run's
+`boot-assets-release-*` artifacts (pass that run's id; they expire after 14
+days). Every object is checked against the manifest's sha256 before upload,
+because the daemon pins that manifest by hash and a rebuild would change it.
 
 ### Local build
 

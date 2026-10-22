@@ -1,4 +1,3 @@
-pub mod containerd;
 pub mod fex;
 pub mod release;
 pub mod rootfs;

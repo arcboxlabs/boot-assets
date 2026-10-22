@@ -126,11 +126,7 @@ async fn check_cdn_exists(url: &str) -> Result<bool> {
     }
 }
 
-pub(super) async fn download_and_extract(
-    url: &str,
-    extract_path: &str,
-    dest: &std::path::Path,
-) -> Result<()> {
+async fn download_and_extract(url: &str, extract_path: &str, dest: &std::path::Path) -> Result<()> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
         .build()?;
