@@ -52,7 +52,7 @@ tokio = { version = "1", features = [
     "macros",
 ], optional = true }
 futures-util = { version = "0.3", optional = true }
-dirs = { version = "6", optional = true }
+dirs = { version = "7", optional = true }
 
 # build feature (CLI only)
 anyhow = { version = "1.0.102", optional = true }
