@@ -39,8 +39,12 @@ const CORE_STATIC_BINARIES: &[&str] = &[
 ];
 
 /// NFS server utilities (Alpine `nfs-utils` package).
+///
+/// `nfsdcld` is the NFSv4 client-tracking daemon. Without a tracker the
+/// kernel refuses `/proc/fs/nfsd/v4_end_grace`, so every boot sits out the
+/// full grace period and the host's first open under `~/ArcBox` waits for it.
 const NFS_PACKAGES: &[&str] = &["nfs-utils"];
-const NFS_BINARIES: &[&str] = &["rpc.nfsd", "exportfs", "rpc.mountd"];
+const NFS_BINARIES: &[&str] = &["rpc.nfsd", "exportfs", "rpc.mountd", "nfsdcld"];
 
 const EROFS_BLOCK_SIZE: &str = "4096";
 const EROFS_XATTR_TOLERANCE: &str = "-1";
